@@ -19,6 +19,7 @@ const NOTIONAL_CHIPS = [1_000, 10_000, 50_000, 250_000, 1_000_000]
 const HORIZONS = [[24, '1 T'], [168, '7 T'], [720, '30 T'], [2160, '90 T']]
 const FUNDING_BASES = [['now', 'Aktuell'], ['avg24', 'Ø 24 h'], ['avg7d', 'Ø 7 T']]
 const BASIS_MODES = [['hold', 'bleibt'], ['converge', 'konvergiert']]
+const FUNDING_IMPACT = [['real', 'realistisch'], ['max', 'konservativ'], ['off', 'ignorieren']]
 const CATEGORIES = [['all', 'Alle'], ['equity', 'Aktien & ETFs'], ['crypto', 'Krypto'], ['commodity', 'Rohstoffe']]
 const LEVERAGES = [1, 2, 3, 5, 10]
 
@@ -27,6 +28,7 @@ const DEFAULTS = {
   hours: 720,
   fundingBasis: 'avg7d',
   basisMode: 'hold',
+  fundingImpact: 'real',
   tier: 0,
   staking: 0,
   leverage: 2,
@@ -43,7 +45,7 @@ const DEFAULTS = {
 // ── settings ⇄ URL hash ─────────────────────────────────────
 
 const HASH_KEYS = {
-  notional: ['n', Number], hours: ['h', Number], fundingBasis: ['f', String], basisMode: ['b', String],
+  notional: ['n', Number], hours: ['h', Number], fundingBasis: ['f', String], basisMode: ['b', String], fundingImpact: ['fi', String],
   tier: ['t', Number], staking: ['s', Number], leverage: ['l', Number], category: ['c', String],
   issuer: ['i', String], q: ['q', String], onlyProfitable: ['p', (v) => v === '1'], showReverse: ['r', (v) => v !== '0'],
   sort: ['sort', String], dir: ['dir', String], pair: ['pair', String],
@@ -66,6 +68,7 @@ function readHash() {
   if (!allowed(HORIZONS, out.hours)) out.hours = DEFAULTS.hours
   if (!allowed(FUNDING_BASES, out.fundingBasis)) out.fundingBasis = DEFAULTS.fundingBasis
   if (!allowed(BASIS_MODES, out.basisMode)) out.basisMode = DEFAULTS.basisMode
+  if (!allowed(FUNDING_IMPACT, out.fundingImpact)) out.fundingImpact = DEFAULTS.fundingImpact
   if (!allowed(CATEGORIES, out.category)) out.category = DEFAULTS.category
   if (!LEVERAGES.includes(out.leverage)) out.leverage = DEFAULTS.leverage
   if (!(out.tier >= 0 && out.tier < VOLUME_TIERS.length)) out.tier = DEFAULTS.tier
@@ -124,6 +127,7 @@ function renderControls() {
   segmented($('hours'), HORIZONS, settings.hours, (v) => set({ hours: v }))
   segmented($('funding-basis'), FUNDING_BASES, settings.fundingBasis, (v) => set({ fundingBasis: v }))
   segmented($('basis-mode'), BASIS_MODES, settings.basisMode, (v) => set({ basisMode: v }))
+  segmented($('funding-impact'), FUNDING_IMPACT, settings.fundingImpact, (v) => set({ fundingImpact: v }))
   segmented($('category'), CATEGORIES, settings.category, (v) => set({ category: v }))
 
   const rates = accountRates(settings)

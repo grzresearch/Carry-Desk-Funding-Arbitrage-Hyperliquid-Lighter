@@ -163,6 +163,7 @@ export function sizeCurveChart({ points: all, notional, best, maxProfitable, wid
         { label: 'Netto', value: fmt.usd(p.netUsd, { sign: true }), color: css('net') },
         { label: 'Kosten Ein + Aus', value: `${fmt.bps(p.costBps)} bps` },
         { label: 'Netto-APR', value: fmt.pct(p.netApr, { sign: true }) },
+        { label: 'Funding p.a. bei dieser Größe', value: fmt.pct(p.fundingApr, { sign: true }) },
       ])
     },
   })

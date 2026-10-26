@@ -57,6 +57,10 @@
       <div class="segmented" id="basis-mode" role="radiogroup" aria-labelledby="basis-label"></div>
     </div>
     <div class="control">
+      <span class="control-label" id="impact-label" title="Dein Perp-Order frisst Liquidität aus dem Buch, aus dem Hyperliquid die Premium liest – das senkt das Funding oberhalb des Zins-Basiswerts. Realistisch: gewichtet mit deiner Größe im Verhältnis zum Stunden-Volumen des Perps (liquide Märkte füllen das Buch schnell wieder auf). Konservativ: die verbrauchte Liquidität kommt nie zurück (Obergrenze).">Eigener Funding-Einfluss</span>
+      <div class="segmented" id="funding-impact" role="radiogroup" aria-labelledby="impact-label"></div>
+    </div>
+    <div class="control">
       <span class="control-label">Gebühren (Taker)</span>
       <details class="popover" id="fees">
         <summary id="fees-summary">Basis-Tier</summary>
@@ -122,6 +126,7 @@
     <p>
       Daten live aus der öffentlichen <a href="https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint" rel="noopener">Hyperliquid Info-API</a>, direkt im Browser.
       Kosten = Implementation Shortfall gegen das Mid zum Entscheidungszeitpunkt (halber Spread + Markt-Impact beim Abarbeiten des Orderbuchs + Taker-Gebühr) für Entry <em>und</em> Exit beider Legs; der Exit wird mit dem heutigen Buch geschätzt.
+      Funding bei deiner Größe: Dein Perp-Order verschiebt die Premium, aus der Hyperliquid das Funding berechnet (P + clamp(I − P)); „realistisch“ gewichtet das mit deiner Größe relativ zum Stunden-Volumen, „konservativ“ nimmt an, dass die Liquidität nie zurückkommt. Innerhalb des Clamp-Bands bleibt das Funding beim Zins-Basiswert.
       Ungedeckte „Mirror“-Token (Aktien-Ticker ohne Emittent und Rücknahme, z. B. AAPL oder SPY eines einzelnen Deployers) werden nicht als Hedge gewertet.
       Delta-neutral heißt nicht risikofrei: Funding kann drehen, Basis und Peg können wandern, Perp-Shorts können liquidiert werden. Keine Anlageberatung.
     </p>

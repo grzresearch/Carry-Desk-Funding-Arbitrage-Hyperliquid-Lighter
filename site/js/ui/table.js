@@ -96,6 +96,15 @@ function costBar(trip) {
   return h('div', { class: 'costbar', 'aria-hidden': 'true' }, seg('spread', spread, 'Spread'), seg('impact', impact, 'Impact'), seg('fee', fee, 'Gebühren'))
 }
 
+/** Funding once your own perp order has moved the premium — shown only when it differs. */
+function fundingShift(r, settings) {
+  if (!r.atSize || settings.fundingImpact === 'off') return null
+  const earned = r.direction === 'carry' ? r.fundingApr : -r.fundingApr
+  if (Math.abs(r.atSize.apr - earned) < 0.0005) return null
+  return h('div', { class: 'cell-sub neg', title: 'Dein Perp-Order drückt die Premium, aus der das Funding berechnet wird' },
+    `→ ${fmt.pct(r.atSize.apr, { sign: true, digits: 1 })} bei ${fmt.usd(settings.notional)}`)
+}
+
 function row(r, settings, selectedId) {
   const p = r.pair
   const { econ, trip, curve } = r
@@ -103,7 +112,8 @@ function row(r, settings, selectedId) {
     assetCell(r),
     h('td', { class: 'num', 'data-label': 'Funding p.a.' },
       h('div', { class: 'cell-main' }, fmt.pct(r.fundingApr, { sign: true })),
-      h('div', { class: 'cell-sub', title: r.rate.fallback ? 'Historie lädt noch – bis dahin gilt die aktuelle Rate' : null }, `${fmt.rate(r.rate.value)}/h · ${r.rate.fallback ? 'aktuell*' : FUNDING_SOURCE[r.rate.source]}`)),
+      h('div', { class: 'cell-sub', title: r.rate.fallback ? 'Historie lädt noch – bis dahin gilt die aktuelle Rate' : null }, `${fmt.rate(r.rate.value)}/h · ${r.rate.fallback ? 'aktuell*' : FUNDING_SOURCE[r.rate.source]}`),
+      fundingShift(r, settings)),
     h('td', { class: 'num', 'data-label': 'Basis' },
       h('div', { class: 'cell-main' }, r.basis == null ? '–' : `${fmt.bps(r.basis, { sign: true })} bps`),
       h('div', { class: 'cell-sub' }, r.basis == null ? (p.kind === 'proxy' ? 'Proxy' : 'kein Preis') : r.basis >= 0 ? 'Perp über Spot' : 'Perp unter Spot')),

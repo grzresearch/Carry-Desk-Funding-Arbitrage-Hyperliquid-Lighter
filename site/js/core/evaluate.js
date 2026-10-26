@@ -1,7 +1,8 @@
 // One pair, live books and the user's assumptions in; one row of economics out.
 
 import { midPrice, spreadBps } from './book.js'
-import { roundTrip, arrivalPrice } from './shortfall.js'
+import { roundTrip, arrivalPrice, PLANS } from './shortfall.js'
+import { fundingParams, premiumShift, fundingAtSize, persistence } from './funding.js'
 import { TOLERANCE } from './matching.js'
 import { carryEconomics, sizeCurve, basisBps, directionFor } from './carry.js'
 import { takerFeeBps } from './fees.js'
@@ -23,6 +24,15 @@ export function fundingRate(perp, history, basis) {
     }
   }
   return { value: perp.funding, source: 'now', samples: 1, fallback: basis !== 'now' }
+}
+
+/** Premium index matching the funding basis: the latest sample or the window average. */
+export function premiumFor(perp, history, rate) {
+  if (rate.source === 'now') return perp.premium
+  const span = rate.source === 'avg24' ? 24 : 168
+  const cutoff = history[history.length - 1].time - span * HOUR
+  const recent = history.filter((h) => h.time > cutoff && Number.isFinite(h.premium))
+  return recent.length ? recent.reduce((s, h) => s + h.premium, 0) / recent.length : perp.premium
 }
 
 const twoSided = (book) => Boolean(book?.bids?.length && book?.asks?.length)
@@ -72,11 +82,26 @@ export function evaluatePair(pair, { books, history, settings, rates, quotes }) 
     return { ...base, status: 'mismatch' }
   }
 
+  // Your perp order eats into the book the premium is read from. Through the funding
+  // formula that lowers the rate you earn — only above the interest baseline — for as
+  // long as the consumed liquidity stays missing (see persistence in core/funding.js).
+  const params = fundingParams(pair.perp)
+  const basePremium = premiumFor(pair.perp, history?.get(pair.perp.coin), rate)
+  const perpSide = PLANS[direction].perpEntry
+  const impact = settings.fundingImpact ?? 'real'
+  const rateAt = (trip) => {
+    if (impact === 'off') return rate.value
+    const shift = premiumShift(perpBook, perpSide, trip.perpQty, pair.perp.oracle ?? perpRef, pair.perp)
+    const kept = persistence(trip.notional, pair.perp, impact)
+    return fundingAtSize({ baseRate: rate.value, basePremium, shift: shift == null ? null : shift * kept, params })
+  }
+
   const common = { spotBook, perpBook, direction, spotFeeBps: fees.spot, perpFeeBps: fees.perp, spotRef, perpRef }
   const trip = roundTrip({ ...common, notional: settings.notional })
+  const rateAtSize = rateAt(trip)
   const econ = carryEconomics({
     trip,
-    hourlyRate: rate.value,
+    hourlyRate: rateAtSize,
     hours: settings.hours,
     basis,
     basisMode: settings.basisMode,
@@ -84,7 +109,7 @@ export function evaluatePair(pair, { books, history, settings, rates, quotes }) 
   })
   const curve = sizeCurve({
     ...common,
-    hourlyRate: rate.value,
+    rateAt,
     hours: settings.hours,
     basis,
     basisMode: settings.basisMode,
@@ -92,8 +117,9 @@ export function evaluatePair(pair, { books, history, settings, rates, quotes }) 
   })
   // Economics of a size the books cannot fill would be fiction: only partial fills are
   // costed while funding accrues on the whole notional. Keep the trip, drop the econ.
-  if (!trip.complete) return { ...base, trip, econ: null, curve, status: 'thin' }
-  return { ...base, trip, econ, curve, status: econ.netUsd > 0 ? 'profit' : 'loss' }
+  const atSize = { rate: rateAtSize, apr: rateAtSize * 24 * 365 * (direction === 'carry' ? 1 : -1), premium: basePremium }
+  if (!trip.complete) return { ...base, trip, econ: null, curve, atSize, status: 'thin' }
+  return { ...base, trip, econ, curve, atSize, status: econ.netUsd > 0 ? 'profit' : 'loss' }
 }
 
 /** Rank: earning rows first by net, then rows that cannot fill, then rows without books. */

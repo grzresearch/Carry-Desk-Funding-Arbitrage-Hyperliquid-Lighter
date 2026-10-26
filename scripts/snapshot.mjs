@@ -26,7 +26,7 @@ for (const dex of ['', ...dexes.filter(Boolean).map((d) => d.name)]) {
 
 const snapshot = {
   capturedAt: new Date().toISOString(),
-  dexes: dexes.map((d) => d && pick(d, ['name', 'fullName', 'deployer', 'assetToStreamingOiCap', 'assetToFundingMultiplier', 'assetToFundingInterestRate'])),
+  dexes: dexes.map((d) => d && pick(d, ['name', 'fullName', 'deployer', 'assetToStreamingOiCap', 'assetToFundingMultiplier', 'assetToFundingInterestRate', 'assetToFundingClamp'])),
   spot: [
     {
       universe: spotMeta.universe,
