@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Carry Desk · Hyperliquid</title>
+  <meta name="description" content="Spot ⇄ Perp Funding-Arbitrage auf Hyperliquid: jedes Asset mit Spot- und Perp-Markt, Funding-Carry, Basis und Implementation-Shortfall für Entry und Exit beider Legs – live aus der öffentlichen API.">
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="js/main.js"></script>
+</head>
+<body>
+  <header class="masthead">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><use href="favicon.svg#mark"/></svg>
+      <div>
+        <h1>Carry Desk</h1>
+        <p class="tagline">Spot ⇄ Perp Funding-Arbitrage auf Hyperliquid</p>
+      </div>
+    </div>
+    <div class="live" id="live" aria-live="polite">
+      <span class="live-dot" aria-hidden="true"></span>
+      <span id="live-text">Verbinde …</span>
+      <span class="live-api" aria-hidden="true">API</span>
+      <span class="live-meter" id="live-meter" role="meter" aria-label="API-Gewicht der letzten Minute" aria-valuemin="0" aria-valuemax="1200" aria-valuenow="0" title="API-Gewicht der letzten Minute (Limit 1200 pro IP)"></span>
+      <button class="icon-btn" id="refresh" type="button" title="Jetzt aktualisieren" aria-label="Jetzt aktualisieren">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16 10a6 6 0 1 1-1.76-4.24M16 3.5V6h-2.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button class="icon-btn" id="theme" type="button" title="Hell/Dunkel" aria-label="Farbschema wechseln">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3a7 7 0 1 0 0 14V3Z" fill="currentColor"/><circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <details class="params" id="params" open>
+    <summary><span id="params-text">Annahmen</span><span class="params-edit">Anpassen</span></summary>
+  <section class="controls" aria-label="Parameter">
+    <div class="control">
+      <label for="notional">Positionsgröße je Leg</label>
+      <div class="notional">
+        <span class="unit">$</span>
+        <input id="notional" inputmode="numeric" autocomplete="off" spellcheck="false" value="10.000">
+      </div>
+      <div class="chips" id="notional-chips"></div>
+    </div>
+    <div class="control">
+      <span class="control-label" id="hours-label">Haltedauer</span>
+      <div class="segmented" id="hours" role="radiogroup" aria-labelledby="hours-label"></div>
+    </div>
+    <div class="control">
+      <span class="control-label" id="funding-label">Funding-Annahme</span>
+      <div class="segmented" id="funding-basis" role="radiogroup" aria-labelledby="funding-label"></div>
+    </div>
+    <div class="control">
+      <span class="control-label" id="basis-label">Basis bei Exit</span>
+      <div class="segmented" id="basis-mode" role="radiogroup" aria-labelledby="basis-label"></div>
+    </div>
+    <div class="control">
+      <span class="control-label">Gebühren (Taker)</span>
+      <details class="popover" id="fees">
+        <summary id="fees-summary">Basis-Tier</summary>
+        <div class="popover-body">
+          <label>14-Tage-Volumen <select id="fee-tier"></select></label>
+          <label>HYPE-Staking <select id="fee-staking"></select></label>
+          <label>Perp-Hebel <select id="leverage"></select></label>
+          <p class="fine">Spot- und Perp-Taker-Raten nach offizieller Formel: HIP-3-Deployer-Fee-Scale, Growth Mode, Aligned-Quote- und Stable-Pair-Rabatte werden je Markt angewendet.</p>
+        </div>
+      </details>
+    </div>
+  </section>
+  </details>
+
+  <section class="filters" aria-label="Filter">
+    <input id="search" type="search" placeholder="Suche: NVDA, HYPE, xyz, EQX …" autocomplete="off" aria-label="Suche">
+    <div class="segmented" id="category" role="radiogroup" aria-label="Kategorie"></div>
+    <select id="issuer" aria-label="Emittent"></select>
+    <label class="toggle"><input type="checkbox" id="only-profitable"> nur profitabel</label>
+    <label class="toggle"><input type="checkbox" id="show-reverse" checked> Reverse (Spot-Bestand nötig)</label>
+  </section>
+
+  <section class="tiles" id="tiles" aria-label="Überblick"></section>
+
+  <main class="board">
+    <div class="table-wrap" id="table-wrap">
+      <table class="pairs" id="pairs">
+        <caption class="sr-only">Spot/Perp-Paare mit Funding-Carry und Implementation Shortfall</caption>
+        <thead>
+          <tr>
+            <th scope="col" data-sort="name" class="col-asset">Asset · Legs</th>
+            <th scope="col" data-sort="funding" class="num">Funding p.a.</th>
+            <th scope="col" data-sort="basis" class="num">Basis</th>
+            <th scope="col" data-sort="cost" class="num" title="Implementation Shortfall für Ein- und Ausstieg beider Legs. Balken: Spread (grau) · Impact (rot) · Gebühren (hell)">Kosten Ein + Aus</th>
+            <th scope="col" data-sort="breakeven" class="num">Break-even</th>
+            <th scope="col" data-sort="net" class="num">Netto</th>
+            <th scope="col" data-sort="optimal" class="num">Optimale Größe</th>
+            <th scope="col" data-sort="depth" class="num">Tiefe</th>
+            <th scope="col" data-sort="status" class="col-status">Status</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <p class="empty" id="empty" hidden></p>
+    </div>
+  </main>
+
+  <aside class="drawer" id="drawer" aria-hidden="true" inert aria-labelledby="drawer-title">
+    <div class="drawer-scrim" data-close></div>
+    <div class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="drawer-title" tabindex="-1">
+      <div class="drawer-bar">
+        <button class="icon-btn" type="button" data-close aria-label="Schließen">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div id="detail"></div>
+    </div>
+  </aside>
+
+  <div class="tooltip" id="tooltip" role="tooltip" hidden></div>
+
+  <footer class="footnote">
+    <p>
+      Daten live aus der öffentlichen <a href="https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint" rel="noopener">Hyperliquid Info-API</a>, direkt im Browser.
+      Kosten = Implementation Shortfall gegen das Mid zum Entscheidungszeitpunkt (halber Spread + Markt-Impact beim Abarbeiten des Orderbuchs + Taker-Gebühr) für Entry <em>und</em> Exit beider Legs; der Exit wird mit dem heutigen Buch geschätzt.
+      Ungedeckte „Mirror“-Token (Aktien-Ticker ohne Emittent und Rücknahme, z. B. AAPL oder SPY eines einzelnen Deployers) werden nicht als Hedge gewertet.
+      Delta-neutral heißt nicht risikofrei: Funding kann drehen, Basis und Peg können wandern, Perp-Shorts können liquidiert werden. Keine Anlageberatung.
+    </p>
+  </footer>
+</body>
+</html>
