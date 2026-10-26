@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { evaluatePair, fundingRate, bracketed } from '../site/js/core/evaluate.js'
+import { evaluatePair, fundingRate } from '../site/js/core/evaluate.js'
 import { accountRates } from '../site/js/core/fees.js'
 
 const HOUR = 3_600_000
@@ -14,7 +14,6 @@ const pair = {
   kind: 'bridged',
   perpUnits: 1,
   quoteUsd: 1,
-  verify: null,
   spot: { kind: 'spot', coin: 'S', base: { name: 'UX' }, quote: 'USDC', mid: 100, volume: 1e6 },
   perp: { kind: 'perp', coin: 'P', dex: '', collateral: 'USDC', funding: 0.0001, mid: 100.1, mark: 100.1 },
 }
@@ -76,13 +75,4 @@ test('proxies carry no basis; quotes are converted to USD for basis', () => {
   assert.equal(evaluatePair({ ...pair, kind: 'proxy' }, ctx(books)).basis, null)
   const r = evaluatePair({ ...pair, quoteUsd: 0.998 }, ctx(books))
   assert.ok(Math.abs(r.basis - (100 / 99.8 - 1) * 1e4) < 1e-6)
-})
-
-test('bracket verification rejects a ticker the spot quotes contradict', () => {
-  const wide = { bids: [{ px: 60, sz: 10 }], asks: [{ px: 90, sz: 10 }] }
-  assert.equal(bracketed(wide, 75), true)
-  assert.equal(bracketed(wide, 100), false)
-  const weak = { ...pair, verify: 'bracket' }
-  assert.equal(evaluatePair(weak, ctx({ S: wide, P: deep(100, 0.01, 0.01) })).status, 'mismatch')
-  assert.notEqual(evaluatePair(weak, ctx({ S: wide, P: deep(75, 0.01, 0.01) })).status, 'mismatch')
 })

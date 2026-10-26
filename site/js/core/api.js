@@ -44,6 +44,7 @@ export function createClient({ fetchImpl = globalThis.fetch.bind(globalThis), li
     metaAndAssetCtxs: (dex = '') => info(dex ? { type: 'metaAndAssetCtxs', dex } : { type: 'metaAndAssetCtxs' }, { priority: 1 }),
     l2Book: (coin, { nSigFigs = null, priority = 3 } = {}) =>
       info(nSigFigs ? { type: 'l2Book', coin, nSigFigs } : { type: 'l2Book', coin }, { weight: 2, priority }),
+    tokenDetails: (tokenId, { priority = 6 } = {}) => info({ type: 'tokenDetails', tokenId }, { priority }),
     fundingHistory: (coin, startTime, { priority = 8 } = {}) =>
       info({ type: 'fundingHistory', coin, startTime }, { weight: 20, priority, perItems: 20 }),
   }

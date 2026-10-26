@@ -37,7 +37,6 @@ export const STATUS = {
   thin: { label: 'Zu wenig Tiefe', tone: 'warn', icon: 'warn' },
   nobook: { label: 'Kein Orderbuch', tone: 'idle', icon: 'dot' },
   loading: { label: 'Lade …', tone: 'idle', icon: 'clock' },
-  mismatch: { label: 'Preis passt nicht', tone: 'idle', icon: 'cross' },
 }
 
 export const DIRECTION = {

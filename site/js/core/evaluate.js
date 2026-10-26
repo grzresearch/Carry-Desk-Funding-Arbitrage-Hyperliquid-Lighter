@@ -26,11 +26,6 @@ export function fundingRate(perp, history, basis) {
 
 const twoSided = (book) => Boolean(book?.bids?.length && book?.asks?.length)
 
-/** A weak ticker match holds if the perp trades inside the spot market's quotes. */
-export function bracketed(spotBook, perpPx) {
-  return perpPx >= spotBook.bids[0].px * 0.995 && perpPx <= spotBook.asks[0].px * 1.005
-}
-
 /**
  * @param {object} pair      from matchPairs()
  * @param {object} ctx
@@ -66,9 +61,8 @@ export function evaluatePair(pair, { books, history, settings, rates, quotes }) 
   if (spotBook === undefined || perpBook === undefined) return { ...base, status: 'loading' }
   // One-sided books happen right at a listing: asks from the issuer, no bids yet.
   const oneSided = (book) => Boolean(book?.bids?.length || book?.asks?.length)
-  if (!twoSided(spotBook)) return { ...base, status: pair.verify ? 'mismatch' : 'nobook', missing: 'spot', oneSided: oneSided(spotBook) }
+  if (!twoSided(spotBook)) return { ...base, status: 'nobook', missing: 'spot', oneSided: oneSided(spotBook) }
   if (!twoSided(perpBook)) return { ...base, status: 'nobook', missing: 'perp', oneSided: oneSided(perpBook) }
-  if (pair.verify === 'bracket' && !bracketed(spotBook, perpMid / pair.perpUnits / q)) return { ...base, status: 'mismatch' }
 
   const common = { spotBook, perpBook, direction, spotFeeBps: fees.spot, perpFeeBps: fees.perp }
   const trip = roundTrip({ ...common, notional: settings.notional })
@@ -93,4 +87,4 @@ export function evaluatePair(pair, { books, history, settings, rates, quotes }) 
 }
 
 /** Rank: earning rows first by net, then rows that cannot fill, then rows without books. */
-export const STATUS_RANK = { profit: 0, loss: 1, thin: 2, nobook: 3, loading: 4, mismatch: 5 }
+export const STATUS_RANK = { profit: 0, loss: 1, thin: 2, nobook: 3, loading: 4 }

@@ -26,18 +26,51 @@ export const OVERRIDES = {
   WMNT: { underlying: 'MNT', kind: 'wrapped', issuer: null }, // "Mantle"
   LZCC: { underlying: 'CC', kind: 'bridged', issuer: 'LayerZero' }, // Canton Coin
   MMOVE: { underlying: 'MOVE', kind: 'bridged', issuer: null, evidence: 'moderate' },
+  LZZRO: { underlying: 'ZRO', kind: 'bridged', issuer: 'LayerZero' },
 }
 
 /** Tokens that look like an underlying but are not 1:1 claims on it. */
-export const EXCLUDED = new Set(['KHYPE', 'STHYPE', 'WSTHYPE', 'LHYPE', 'BEHYPE', 'HPEPE', 'HPUMP', 'HOP', 'HAR'])
+export const EXCLUDED = new Set(['KHYPE', 'STHYPE', 'WSTHYPE', 'LHYPE', 'BEHYPE', 'DHYPE', 'HPEPE', 'HPUMP', 'HOP', 'HAR', 'FARM'])
+
+/**
+ * Deployers of unbacked "mirror" tokens: stock and ETF tickers (AAPL, AMZN, SPY, GLD …)
+ * whose whole supply was minted to one wallet, copying real share counts, with no
+ * redemption. They track nothing, so they are never a hedge. `tokenDetails` reveals the
+ * deployer of any new token; the token ids below cover today's list without a lookup.
+ */
+export const UNBACKED_DEPLOYERS = new Set(['0x9a93d976277bfda0b69b1625358cb257f4908106'])
+export const UNBACKED_TOKEN_IDS = new Set([
+  '0x8b92defb1901e6be9384d365c4f306a4', // CRCL
+  '0xba48f5724be19bf0b127bb4c7fbeb9db', // GOOGL
+  '0xec340db435d4d90899e97655cb8e71f5', // AAPL
+  '0xe101753dcfea619a512111d3ae54a592', // HOOD
+  '0xd35b9bc1770c7bdda96f65cf0f76d4d5', // AMZN
+  '0x555659a2a856d42399cdde096eb998e9', // META
+  '0xf5559ee90ac19c61eb6379eb3b3dade8', // MSFT
+  '0x92de6e7ea04b168f6acc93d18f3becce', // ORCL
+  '0x5e28c011d22a86d0787301fc8512fb00', // MU
+  '0x7d12581c6783aed7cd320d5460077063', // SPCX
+  '0xeba4707b8cce42965026c6863faca7d4', // AVGO
+  '0xf574f3e097a19ad8f184141d669d2514', // BNB1
+  '0xd0b13a173230b8e8dfd664ac0a00c9a8', // GLD
+  '0x354131c048026531b2e4bb07d3180977', // SLV
+  '0x7ad071597884285ad3be27ef21a024f1', // SPY
+  '0xd443b26d9c0663dc89413d4cbab11b5b', // QQQ
+])
+
+/** Is this spot token a known unbacked mirror? `deployers` maps tokenId → deployer. */
+export function isUnbacked(token, deployers) {
+  return UNBACKED_TOKEN_IDS.has(token.tokenId) || UNBACKED_DEPLOYERS.has(deployers?.get(token.tokenId))
+}
 
 /**
  * Equivalent exposure under different tickers. `scale` is the perp price per unit of
  * the class's reference spot price (S&P 500 index ≈ 10 × SPY).
  */
 export const PROXY_CLASSES = [
-  { key: 'S&P 500', spot: ['SPY'], perps: { US500: 1, USA500: 10, SP500: 10 } },
-  { key: 'Nasdaq-100', spot: ['QQQ'], perps: { USTECH: 1, XYZ100: 41, USA100: 41 } },
+  // Index level ÷ ETF-scaled contract, measured live: SP500/US500 ≈ 10.03, XYZ100/USTECH ≈ 41.1.
+  { key: 'S&P 500', spot: ['SPY'], perps: { US500: 1, USA500: 10.03, SP500: 10.03 } },
+  { key: 'Nasdaq-100', spot: ['QQQ'], perps: { USTECH: 1, XYZ100: 41.1, USA100: 41.1 } },
   { key: 'Gold', spot: ['XAUT', 'XAUM', 'PAXG', 'GOLD'], perps: { GOLD: 1, PAXG: 1, XAUT: 1 } },
 ]
 
@@ -45,12 +78,11 @@ export const COMMODITIES = new Set(['Gold', 'GOLD', 'SILVER', 'PLATINUM', 'PALLA
 export const FX = new Set(['EUR', 'JPY', 'GBP', 'KRW', 'DXY', 'CHF', 'CNH', 'AUD', 'CAD'])
 
 /**
- * Price agreement (perp per underlying unit ÷ spot, in USD) a match needs. Weak tickers
- * outside `weak` but within `bracket` are kept only if the perp later turns out to sit
- * inside the spot bid/ask: thin books make the mid meaningless. Strong matches are
- * rejected only when prices are wildly apart (a ticker collision, e.g. STX on two dexes).
+ * Price agreement (perp per underlying unit ÷ spot, in USD) a match needs. Weak and
+ * moderate evidence must be confirmed by a price; strong evidence is rejected only when
+ * prices are wildly apart (a ticker collision, e.g. STX on two dexes).
  */
-export const TOLERANCE = { weak: 0.1, moderate: 0.15, proxy: 0.03, strong: 0.5, bracket: 2, flag: 0.05 }
+export const TOLERANCE = { weak: 0.1, moderate: 0.15, proxy: 0.03, strong: 0.5, flag: 0.05 }
 
 const words = (s) => (s ?? '').split(/[^A-Za-z0-9]+/).filter(Boolean)
 
@@ -149,9 +181,11 @@ function tokenPrices(spotMarkets, quotes, usd) {
 
 /**
  * Join every spot pair with every perp on the same underlying.
- * @param {{ spot: object[], perps: object[] }} universe output of buildUniverse()
+ * @param {{ spot: object[], perps: object[], quotes: Set<string> }} universe output of buildUniverse()
+ * @param {{ deployers?: Map<string, string> }} opts  tokenId → deployer, from tokenDetails
+ * @returns {{ pairs: object[], unbacked: string[] }}
  */
-export function matchPairs(universe) {
+export function matchPairs(universe, { deployers = new Map() } = {}) {
   const quotes = universe.quotes
   const usd = quoteUsd(universe.spot, quotes)
   // Index live perps by join key.
@@ -186,19 +220,11 @@ export function matchPairs(universe) {
         return { ...e, deviation }
       })
       const tol = TOLERANCE[cand.evidence]
-      const accepted = []
-      for (const e of checked) {
-        const dev = e.deviation
-        if (dev == null) {
-          if (cand.evidence !== 'weak') accepted.push(e)
-        } else if (e.proxy) {
-          if (Math.abs(dev) <= TOLERANCE.proxy) accepted.push(e)
-        } else if (Math.abs(dev) <= tol) {
-          accepted.push(e)
-        } else if (cand.evidence === 'weak' && 1 + dev >= 1 / TOLERANCE.bracket && 1 + dev <= TOLERANCE.bracket) {
-          accepted.push({ ...e, verify: 'bracket' })
-        }
-      }
+      const accepted = checked.filter((e) => {
+        // Without a spot price only issuer conventions and curated overrides count.
+        if (e.deviation == null) return cand.evidence === 'strong'
+        return Math.abs(e.deviation) <= (e.proxy ? TOLERANCE.proxy : tol)
+      })
       if (!accepted.length) continue
       result = { ...cand, key, proxy: Boolean(proxy), perps: accepted, spotPx }
       break
@@ -208,11 +234,16 @@ export function matchPairs(universe) {
   }
 
   const pairs = []
+  const unbacked = new Set()
   for (const spot of universe.spot) {
     if (!quotes.has(spot.quote) || quotes.has(spot.base.name)) continue
+    if (isUnbacked(spot.base, deployers)) {
+      unbacked.add(spot.base.name)
+      continue
+    }
     const res = resolve(spot.base)
     if (!res) continue
-    for (const { perp, units, proxy, deviation, verify } of res.perps) {
+    for (const { perp, units, proxy, deviation } of res.perps) {
       const kind = proxy ? 'proxy' : res.kind
       pairs.push({
         id: `${spot.coin}|${perp.coin}`,
@@ -225,12 +256,11 @@ export function matchPairs(universe) {
         issuer: res.issuer,
         evidence: res.evidence,
         deviation,
-        verify: verify ?? null,
         quoteUsd: usd.get(spot.quote) ?? 1,
         flagged: deviation != null && Math.abs(deviation) > TOLERANCE.flag,
         category: categoryOf(res.key, res.kind, perp),
       })
     }
   }
-  return pairs
+  return { pairs, unbacked: [...unbacked].sort() }
 }

@@ -6,7 +6,7 @@ import { matchPairs, spotCandidates, perpUnderlying } from '../site/js/core/matc
 
 const snapshot = JSON.parse(fs.readFileSync(new URL('./fixtures/universe.json', import.meta.url)))
 const universe = buildUniverse(snapshot)
-const pairs = matchPairs(universe)
+const { pairs, unbacked } = matchPairs(universe)
 const find = (spotName, perpCoin) => pairs.find((p) => p.spot.base.name === spotName && p.perp.coin === perpCoin && p.spot.quote === 'USDC')
 const spotsOf = (spotName) => pairs.filter((p) => p.spot.base.name === spotName)
 
@@ -51,7 +51,7 @@ test('the same token pairs once per quote currency', () => {
 test('proxy classes join ETF tokens to index perps with their price scale', () => {
   const sp = find('SPYX', 'xyz:SP500')
   assert.equal(sp.kind, 'proxy')
-  assert.equal(sp.perpUnits, 10)
+  assert.equal(sp.perpUnits, 10.03)
   assert.equal(sp.underlying, 'S&P 500')
   assert.ok(find('XAUT0', 'PAXG'), 'tokenised gold ↔ PAXG')
   assert.ok(find('XAUT0', 'xyz:GOLD'))
@@ -64,19 +64,30 @@ test('liquid staking tokens and look-alikes are not hedges', () => {
   }
 })
 
-test('bare tickers must be confirmed by price', () => {
-  // Far off on the mid, but within 2×: kept only if the perp later sits inside the spot
-  // bid/ask (these ticker tokens have books 10–120 % wide, so their mid means nothing).
-  for (const t of ['AMZN', 'AVGO', 'META', 'TSLA', 'MU']) {
-    const ps = spotsOf(t)
-    assert.ok(ps.length && ps.every((p) => p.verify === 'bracket'), t)
+test('unbacked mirror tokens are excluded and reported', () => {
+  for (const t of ['AMZN', 'AVGO', 'META', 'MU', 'AAPL', 'GOOGL', 'HOOD', 'MSFT', 'ORCL', 'CRCL', 'SPCX', 'SPY', 'QQQ', 'BNB1', 'GLD']) {
+    assert.equal(spotsOf(t).length, 0, t)
   }
-  // Close enough to count outright, but labelled as a weak match.
-  const hood = find('HOOD', 'xyz:HOOD')
-  assert.equal(hood.evidence, 'weak')
-  assert.equal(hood.verify, null)
+  for (const t of ['AAPL', 'SPY', 'BNB1']) assert.ok(unbacked.includes(t), t)
+  // The deployer check covers tokens that are not on the static list.
+  const fake = buildUniverse(snapshot)
+  const nvdax = fake.spot.find((m) => m.base.name === 'NVDAX').base
+  const { pairs: again } = matchPairs(fake, { deployers: new Map([[nvdax.tokenId, '0x9a93d976277bfda0b69b1625358cb257f4908106']]) })
+  assert.ok(!again.some((p) => p.spot.base.name === 'NVDAX'))
+})
+
+test('bare tickers must be confirmed by price', () => {
+  // A ticker clone priced 23 % below the stock is a different asset.
+  assert.equal(spotsOf('TSLA').length, 0)
+  const purr = find('PURR', 'PURR')
+  assert.equal(purr.evidence, 'weak')
   // Squatters priced orders of magnitude away never match.
   for (const t of ['TRUMP', 'PEPE', 'PUMP', 'BERA', 'ANSEM', 'NEIRO']) assert.equal(spotsOf(t).length, 0, t)
+})
+
+test('moderate evidence without a spot price is not enough', () => {
+  // FXMR "Freedom XMR" has no book and is not 1:1 with XMR.
+  assert.equal(spotsOf('FXMR').length, 0)
 })
 
 test('research-backed overrides resolve', () => {

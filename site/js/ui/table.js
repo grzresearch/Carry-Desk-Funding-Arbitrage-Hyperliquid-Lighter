@@ -39,8 +39,6 @@ export function filterRows(rows, f) {
   const q = f.q.trim().toLowerCase()
   return rows.filter((r) => {
     const p = r.pair
-    // A ticker match the books contradict is not a pair at all.
-    if (r.status === 'mismatch') return false
     if (f.category !== 'all' && p.category !== f.category) return false
     if (f.issuer !== 'all' && (p.issuer ?? 'none') !== f.issuer) return false
     if (f.onlyProfitable && r.status !== 'profit') return false
@@ -144,7 +142,7 @@ function tile(label, value, sub, { onClick } = {}) {
     h('div', { class: 'tile-sub' }, onClick ? h('button', { class: 'linkish', type: 'button', onclick: onClick }, sub) : sub))
 }
 
-export function renderTiles(el, rows, allPairs, settings, onOpen) {
+export function renderTiles(el, rows, allPairs, unbacked, settings, onOpen) {
   const priced = rows.filter((r) => r.econ && r.trip?.complete)
   const profitable = priced.filter((r) => r.status === 'profit')
   const best = profitable.reduce((a, r) => (!a || r.econ.netUsd > a.econ.netUsd ? r : a), null)
@@ -153,7 +151,14 @@ export function renderTiles(el, rows, allPairs, settings, onOpen) {
   const eqx = equities.filter((r) => r.pair.issuer === 'EQX')
   const eqxLive = eqx.filter((r) => r.status !== 'nobook' && r.status !== 'loading')
   mount(el,
-    tile('Spot ⇄ Perp-Paare', String(rows.length), `${underlyings.size} Underlyings · ${new Set(allPairs.map((p) => p.perp.dex || 'main')).size} Perp-Dexes`),
+    h('div', { class: 'tile' },
+      h('div', { class: 'tile-label' }, 'Spot ⇄ Perp-Paare'),
+      h('div', { class: 'tile-value' }, String(rows.length)),
+      h('div', { class: 'tile-sub' },
+        `${underlyings.size} Underlyings · ${new Set(allPairs.map((p) => p.perp.dex || 'main')).size} Perp-Dexes`,
+        unbacked.length
+          ? h('span', { title: `Ungedeckte Mirror-Token (gesamte Supply an eine Wallet geminted, keine Rücknahme) – kein Hedge: ${unbacked.join(', ')}` }, ` · ${unbacked.length} Mirror-Token ausgeschlossen`)
+          : null)),
     tile(`Lohnt sich bei ${fmt.usd(settings.notional)}`, `${profitable.length} von ${priced.length}`, `über ${fmt.duration(settings.hours)} inkl. Ein- und Ausstieg`),
     best
       ? tile('Bestes Netto', `${fmt.usd(best.econ.netUsd, { sign: true })}`, `${best.pair.underlying} · ${best.pair.spot.base.name} ⇄ ${best.pair.perp.coin} · ${fmt.pct(best.econ.netApr)} p.a.`, { onClick: () => onOpen(best.pair.id) })

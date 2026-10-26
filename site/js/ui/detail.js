@@ -126,6 +126,8 @@ function risks(r, settings, history) {
   } else {
     add('info', `Perp-Short mit ${settings.leverage}× Hebel: bei starkem Kursanstieg droht Liquidation, bevor der Spot-Gewinn gegengerechnet ist (außer bei Portfolio-Margin).`)
   }
+  const maxMarket = (p.perp.maxLeverage ?? 1) >= 25 ? 30e6 : p.perp.maxLeverage >= 20 ? 5e6 : p.perp.maxLeverage >= 10 ? 2e6 : 5e5
+  if (settings.notional > maxMarket) add('warn', `Eine einzelne Market-Order auf diesem Perp ist auf ${fmt.usd(maxMarket)} begrenzt (abhängig vom Max-Hebel) – die Position muss in mehrere Orders aufgeteilt werden.`)
   if (p.perp.collateral !== p.spot.quote) add('info', `Spot notiert in ${p.spot.quote}, der Perp ist in ${p.perp.collateral} besichert – kleines Stablecoin-Basisrisiko.`)
   if (p.category === 'equity' && p.perp.dex) add('info', 'Aktien-Perps laufen 24/7, die Börse nicht: außerhalb der Handelszeiten folgt das Oracle internen Preisen, Spot und Perp können am Wochenende auseinanderlaufen.')
   if (p.perp.oiCap && p.perp.openInterestUsd && p.perp.openInterestUsd > 0.8 * p.perp.oiCap) add('warn', `Open Interest bei ${fmt.pct(p.perp.openInterestUsd / p.perp.oiCap, { digits: 0 })} des Caps – neue Positionen können blockiert werden.`)

@@ -8,11 +8,29 @@ import { createClient } from './core/api.js'
 import { WeightLimiter } from './core/ratelimit.js'
 import { parseBook, deepBook, sideDepth } from './core/book.js'
 import { buildUniverse } from './core/universe.js'
-import { matchPairs } from './core/matching.js'
+import { matchPairs, UNBACKED_DEPLOYERS } from './core/matching.js'
 
 const HOUR = 3_600_000
 const COARSE_SIG_FIGS = 3
 const FULL_SCAN_EVERY = 10 // cycles; also re-reads dexes without live markets
+const DEPLOYER_CACHE = 'carry-desk-deployers'
+
+/** Token deployers never change, so they are cached across visits (if storage works). */
+function loadDeployers() {
+  try {
+    return new Map(Object.entries(JSON.parse(localStorage.getItem(DEPLOYER_CACHE) ?? '{}')))
+  } catch {
+    return new Map()
+  }
+}
+
+function saveDeployers(map) {
+  try {
+    localStorage.setItem(DEPLOYER_CACHE, JSON.stringify(Object.fromEntries(map)))
+  } catch {
+    // Private mode or blocked storage: the lookup simply repeats next visit.
+  }
+}
 
 export class LiveData extends EventTarget {
   constructor({ client = createClient({ limiter: new WeightLimiter({ budget: 1000 }) }) } = {}) {
@@ -20,6 +38,9 @@ export class LiveData extends EventTarget {
     this.client = client
     this.universe = null
     this.pairs = []
+    this.unbacked = [] // spot tokens excluded as unbacked mirrors
+    this.deployers = loadDeployers() // tokenId → deployer address
+    this.pendingDeployers = new Set()
     this.books = new Map() // coin → stitched book
     this.raw = new Map() // coin → { precise, coarse, preciseAt, coarseAt }
     this.history = new Map() // perp coin → [{ time, rate, premium }]
@@ -85,7 +106,40 @@ export class LiveData extends EventTarget {
       this.liveDexes = new Set(perps.filter((p) => p.meta.universe.some((a) => !a.isDelisted)).map((p) => p.dex))
     }
     this.universe = buildUniverse({ dexes, spot, perps })
-    this.pairs = matchPairs(this.universe)
+    this.rematch()
+    this.checkDeployers()
+  }
+
+  rematch() {
+    const { pairs, unbacked } = matchPairs(this.universe, { deployers: this.deployers })
+    this.pairs = pairs
+    this.unbacked = unbacked
+  }
+
+  /**
+   * Matches without an issuer convention rest on ticker and price. Look up who deployed
+   * those tokens once, and drop any that come from a known unbacked-mirror deployer.
+   */
+  checkDeployers() {
+    const tokens = new Map()
+    for (const p of this.pairs) if (p.evidence !== 'strong') tokens.set(p.spot.base.tokenId, p.spot.base)
+    for (const [tokenId] of tokens) {
+      if (!tokenId || this.deployers.has(tokenId) || this.pendingDeployers.has(tokenId)) continue
+      this.pendingDeployers.add(tokenId)
+      this.client
+        .tokenDetails(tokenId)
+        .then((details) => {
+          if (!details?.deployer) return
+          this.deployers.set(tokenId, details.deployer)
+          saveDeployers(this.deployers)
+          if (UNBACKED_DEPLOYERS.has(details.deployer)) {
+            this.rematch()
+            this.notify()
+          }
+        })
+        .catch((err) => console.warn('tokenDetails', tokenId, err.message))
+        .finally(() => this.pendingDeployers.delete(tokenId))
+    }
   }
 
   legCoins() {

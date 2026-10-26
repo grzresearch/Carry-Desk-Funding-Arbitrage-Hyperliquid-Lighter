@@ -257,7 +257,7 @@ function render() {
   evaluateAll()
   renderIssuers()
   const visible = sortRows(filterRows(rows, settings), settings.sort, settings.dir)
-  renderTiles($('tiles'), visible, data.pairs, settings, openPair)
+  renderTiles($('tiles'), visible, data.pairs, data.unbacked, settings, openPair)
   renderRows($('rows'), visible, settings, settings.pair)
   const empty = $('empty')
   empty.hidden = visible.length > 0
