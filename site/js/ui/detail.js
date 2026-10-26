@@ -217,7 +217,9 @@ export function renderDetail(el, r, settings, data) {
   if (curve.points.length > 2) {
     const crossover = curve.maxProfitable
     blocks.push(section('Lohnt sich die Größe?',
-      curve.best
+      curve.best && curve.depthLimited
+        ? `Funding wächst linear mit der Größe, der Shortfall überproportional – hier steigt der Ertrag aber bis zum Ende der sichtbaren Tiefe (${fmt.usd(curve.capacity)}): ${fmt.usd(curve.best.netUsd, { sign: true })} über ${fmt.duration(settings.hours)}. Das echte Optimum liegt darüber.`
+        : curve.best
         ? `Funding wächst linear mit der Größe, der Shortfall überproportional. Am meisten bringen ${fmt.usd(curve.best.notional)} je Leg (${fmt.usd(curve.best.netUsd, { sign: true })} über ${fmt.duration(settings.hours)}); bis ${fmt.usd(crossover.notional)} bleibt die Position im Plus.`
         : `Bei keiner Größe deckt das Funding über ${fmt.duration(settings.hours)} die Kosten für Ein- und Ausstieg – eine längere Haltedauer oder ein günstigeres Gebühren-Tier ändert das eventuell.`,
       h('div', { class: 'card' }, sizeCurveChart({ points: curve.points, notional: settings.notional, best: curve.best, maxProfitable: curve.maxProfitable, width }), sizeTable(curve.points))))

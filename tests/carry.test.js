@@ -81,3 +81,11 @@ test('sizeCurve finds an interior optimum when impact grows faster than funding'
   const t = roundTrip({ spotBook, perpBook, notional: p.notional, direction: 'carry', spotFeeBps: 0, perpFeeBps: 0 })
   near(p.costBps, t.costBps)
 })
+
+test('sizeCurve flags an optimum that is only the end of the visible book', () => {
+  const flat = (start, step) => Array.from({ length: 5 }, (_, i) => ({ px: start + step * i, sz: 1000 }))
+  const book = { bids: flat(99.99, -0.01), asks: flat(100.01, 0.01) }
+  const curve = sizeCurve({ spotBook: book, perpBook: book, direction: 'carry', hourlyRate: 0.001, hours: 720, spotFeeBps: 0, perpFeeBps: 0 })
+  assert.equal(curve.depthLimited, true)
+  assert.equal(curve.best, curve.points[curve.points.length - 1])
+})

@@ -58,7 +58,8 @@ const signClass = (x) => (x > 0 ? 'pos' : x < 0 ? 'neg' : null)
 
 function statusCell(r) {
   const st = STATUS[r.status]
-  const label = r.status === 'nobook' ? (r.missing === 'spot' ? 'Spot ohne Orderbuch' : 'Perp ohne Orderbuch') : st.label
+  const leg = r.missing === 'spot' ? 'Spot' : 'Perp'
+  const label = r.status === 'nobook' ? (r.oneSided ? `${leg}-Buch einseitig` : `${leg} ohne Orderbuch`) : st.label
   return h('td', { class: 'col-status', 'data-label': 'Status' },
     h('div', { class: `status ${st.tone}` }, icon(st.icon), label),
     h('div', { class: 'cell-sub', title: DIRECTION[r.direction] }, r.direction === 'carry' ? 'Spot ↑ · Perp ↓' : 'Spot ↓ · Perp ↑'))
@@ -118,7 +119,10 @@ function row(r, settings, selectedId) {
         : h('div', { class: 'cell-sub' }, '–')),
     h('td', { class: 'num', 'data-label': 'Optimale Größe' },
       curve?.best
-        ? [h('div', { class: 'cell-main' }, fmt.usd(curve.best.notional)), h('div', { class: 'cell-sub' }, `${fmt.usd(curve.best.netUsd, { sign: true })} · max ${fmt.usd(curve.maxProfitable.notional)}`)]
+        ? [
+            h('div', { class: 'cell-main', title: curve.depthLimited ? 'Netto steigt bis zum Ende der sichtbaren Tiefe – das echte Optimum liegt darüber' : null }, `${curve.depthLimited ? '≥ ' : ''}${fmt.usd(curve.best.notional)}`),
+            h('div', { class: 'cell-sub' }, curve.depthLimited ? `${fmt.usd(curve.best.netUsd, { sign: true })} · Buchende` : `${fmt.usd(curve.best.netUsd, { sign: true })} · max ${fmt.usd(curve.maxProfitable.notional)}`),
+          ]
         : h('div', { class: 'cell-sub' }, curve ? 'keine' : '–')),
     h('td', { class: 'num', 'data-label': 'Tiefe' },
       curve

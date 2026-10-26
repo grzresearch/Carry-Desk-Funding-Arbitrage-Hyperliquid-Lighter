@@ -272,7 +272,7 @@ function render() {
 function requestData(visible) {
   const deeper = []
   for (const r of visible) {
-    if (r.status === 'thin' || (r.curve?.best && r.curve.points.at(-1) === r.curve.best)) deeper.push(r.pair.spot.coin, r.pair.perp.coin)
+    if (r.status === 'thin' || r.curve?.depthLimited) deeper.push(r.pair.spot.coin, r.pair.perp.coin)
   }
   data.wantDepth(deeper, settings.notional)
   if (data.updatedAt) data.wantHistory(visible.filter((r) => r.status !== 'nobook').map((r) => r.pair.perp.coin))

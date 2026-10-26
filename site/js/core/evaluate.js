@@ -64,8 +64,10 @@ export function evaluatePair(pair, { books, history, settings, rates, quotes }) 
   }
 
   if (spotBook === undefined || perpBook === undefined) return { ...base, status: 'loading' }
-  if (!twoSided(spotBook)) return { ...base, status: pair.verify ? 'mismatch' : 'nobook', missing: 'spot' }
-  if (!twoSided(perpBook)) return { ...base, status: 'nobook', missing: 'perp' }
+  // One-sided books happen right at a listing: asks from the issuer, no bids yet.
+  const oneSided = (book) => Boolean(book?.bids?.length || book?.asks?.length)
+  if (!twoSided(spotBook)) return { ...base, status: pair.verify ? 'mismatch' : 'nobook', missing: 'spot', oneSided: oneSided(spotBook) }
+  if (!twoSided(perpBook)) return { ...base, status: 'nobook', missing: 'perp', oneSided: oneSided(perpBook) }
   if (pair.verify === 'bracket' && !bracketed(spotBook, perpMid / pair.perpUnits / q)) return { ...base, status: 'mismatch' }
 
   const common = { spotBook, perpBook, direction, spotFeeBps: fees.spot, perpFeeBps: fees.perp }

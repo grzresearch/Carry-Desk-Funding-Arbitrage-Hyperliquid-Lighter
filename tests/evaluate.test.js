@@ -41,6 +41,12 @@ test('an empty spot book (pre-launch) reports nobook on the spot side', () => {
   assert.equal(r.missing, 'spot')
 })
 
+test('a book with asks but no bids is one-sided, not missing', () => {
+  const r = evaluatePair(pair, ctx({ S: { bids: [], asks: [{ px: 101, sz: 5 }] }, P: deep(100.1, 0.05, 0.01) }))
+  assert.equal(r.status, 'nobook')
+  assert.equal(r.oneSided, true)
+})
+
 test('deep books and real funding make a profitable carry', () => {
   const r = evaluatePair(pair, ctx({ S: deep(100, 0.01, 0.01), P: deep(100.1, 0.01, 0.01) }))
   assert.equal(r.direction, 'carry')

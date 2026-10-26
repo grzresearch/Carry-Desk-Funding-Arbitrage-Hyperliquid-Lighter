@@ -72,7 +72,7 @@ export function logGrid(lo, hi, steps) {
  */
 export function sizeCurve({ spotBook, perpBook, direction, hourlyRate, hours, spotFeeBps, perpFeeBps, basis, basisMode, leverage, minNotional = 50, steps = 56 }) {
   const cap = capacity({ spotBook, perpBook, direction })
-  if (!(cap > minNotional)) return { capacity: cap, points: [], best: null, maxProfitable: null }
+  if (!(cap > minNotional)) return { capacity: cap, points: [], best: null, maxProfitable: null, depthLimited: false }
   const points = []
   for (const notional of logGrid(minNotional, cap, steps)) {
     const trip = roundTrip({ spotBook, perpBook, notional, direction, spotFeeBps, perpFeeBps })
@@ -86,5 +86,7 @@ export function sizeCurve({ spotBook, perpBook, direction, hourlyRate, hours, sp
     if (p.netUsd > 0 && (!best || p.netUsd > best.netUsd)) best = p
     if (p.netUsd > 0) maxProfitable = p
   }
-  return { capacity: cap, points, best, maxProfitable }
+  // Still rising at the last visible level: the true optimum lies beyond the data.
+  const depthLimited = Boolean(best) && best === points[points.length - 1]
+  return { capacity: cap, points, best, maxProfitable, depthLimited }
 }
