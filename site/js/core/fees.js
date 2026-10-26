@@ -7,7 +7,7 @@
 export const PERP_TAKER_BPS = [4.5, 4.0, 3.5, 3.0, 2.8, 2.6, 2.4]
 export const SPOT_TAKER_BPS = [7.0, 6.0, 5.0, 4.0, 3.5, 3.0, 2.5]
 
-export const VOLUME_TIERS = ['< $5M', '> $5M', '> $25M', '> $100M', '> $500M', '> $2B', '> $7B']
+export const VOLUME_TIERS = ['< $5 Mio.', '> $5 Mio.', '> $25 Mio.', '> $100 Mio.', '> $500 Mio.', '> $2 Mrd.', '> $7 Mrd.']
 
 /** Discount for staked HYPE, applied to the base rates. */
 export const STAKING_DISCOUNTS = [

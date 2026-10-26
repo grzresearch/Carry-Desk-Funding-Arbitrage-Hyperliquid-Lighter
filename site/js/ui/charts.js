@@ -53,11 +53,23 @@ function yGrid(svg, f, ticks, y, format) {
   }
 }
 
-function xLabels(svg, f, ticks, x, format) {
-  for (const t of ticks) {
-    svg.append(s('text', { x: x(t), y: f.y0 + 18, 'text-anchor': 'middle' }, format(t)))
-  }
+/**
+ * Bottom-axis labels, thinned until none collide (≈6.6 px per glyph at 11 px, 6 px gap).
+ * `major` picks a sparser subset to fall back to first (powers of ten on a log axis);
+ * after that every k-th label is kept so the spacing stays regular.
+ */
+function xLabels(svg, f, ticks, x, format, major) {
+  const all = ticks.map((t) => ({ t, xx: x(t), text: format(t) }))
+  const half = (a) => a.text.length * 3.3
+  const fits = (list) => list.every((a, i) => !i || a.xx - half(a) >= list[i - 1].xx + half(list[i - 1]) + 6)
+  const majors = major ? all.filter((a) => major(a.t)) : []
+  const base = fits(all) || majors.length < 2 ? all : majors
+  let shown = base
+  for (let k = 2; !fits(shown) && k < base.length; k++) shown = base.filter((_, i) => i % k === 0)
+  for (const a of shown) svg.append(s('text', { x: a.xx, y: f.y0 + 18, 'text-anchor': 'middle' }, a.text))
 }
+
+const isPow10 = (v) => Math.abs(Math.log10(v) - Math.round(Math.log10(v))) < 1e-9
 
 /** Invisible overlay that turns pointer x into the nearest datum. */
 function hover(svg, f, { nearest, draw, clear }) {
@@ -106,15 +118,20 @@ export function sizeCurveChart({ points: all, notional, best, maxProfitable, wid
   svg.setAttribute('aria-label', 'Netto-Ertrag über die Haltedauer in Abhängigkeit der Positionsgröße')
 
   yGrid(svg, f, ticks, y, (v) => fmt.usd(v, { axis: true }))
-  xLabels(svg, f, logTicks(lo, hi), lx, (v) => fmt.usd(v, { axis: true }))
+  xLabels(svg, f, logTicks(lo, hi), lx, (v) => fmt.usd(v, { axis: true }), isPow10)
 
   const d = points.map((p, i) => `${i ? 'L' : 'M'}${lx(p.notional).toFixed(1)},${y(p.netUsd).toFixed(1)}`).join('')
   svg.append(s('path', { d, fill: 'none', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round', style: { stroke: css('net') } }))
 
   if (notional >= lo && notional <= hi) {
     const xx = lx(notional)
-    svg.append(s('line', { x1: xx, x2: xx, y1: f.y1, y2: f.y0, 'stroke-width': 1, style: { stroke: css('axis') } }))
-    svg.append(s('text', { x: xx + 5, y: f.y0 - 6 }, 'Deine Größe'))
+    const left = xx > (f.x0 + f.x1) / 2
+    svg.append(s('line', { x1: xx, x2: xx, y1: f.y1, y2: f.y0, 'stroke-width': 1, style: { stroke: css('muted') } }))
+    svg.append(s('text', { x: xx + (left ? -5 : 5), y: f.y0 - 6, 'text-anchor': left ? 'end' : 'start' }, 'Deine Größe'))
+  } else if (notional > hi) {
+    // The books cannot fill the chosen size: the curve ends where the depth ends.
+    svg.append(s('line', { class: 'grid', x1: f.x1, x2: f.x1, y1: f.y1, y2: f.y0 }))
+    svg.append(s('text', { x: f.x1 - 4, y: f.y0 - 6, 'text-anchor': 'end' }, `Buchende – ${fmt.usd(notional)} passt nicht`))
   }
   if (best) {
     const bx = lx(best.notional)
@@ -144,7 +161,7 @@ export function sizeCurveChart({ points: all, notional, best, maxProfitable, wid
       layer.append(dot(xx, y(p.netUsd), css('net')))
       showTooltip(evt, `Größe ${fmt.usd(p.notional)} je Leg`, [
         { label: 'Netto', value: fmt.usd(p.netUsd, { sign: true }), color: css('net') },
-        { label: 'Kosten Ein+Aus', value: `${fmt.bps(p.costBps)} bps` },
+        { label: 'Kosten Ein + Aus', value: `${fmt.bps(p.costBps)} bps` },
         { label: 'Netto-APR', value: fmt.pct(p.netApr, { sign: true }) },
       ])
     },
@@ -193,14 +210,19 @@ export function depthChart({ sides, notional, width = 640, height = 240 }) {
     return out
   }
   for (const c of curves) {
-    const pts = clip(c.pts)
-    const line = pts.map((p, i) => `${i ? 'L' : 'M'}${x(p.d).toFixed(1)},${y(Math.min(p.cum, yt.hi)).toFixed(1)}`).join('')
+    let pts = clip(c.pts)
+    // A book deeper than the y-range leaves through the top edge rather than drawing a
+    // fake plateau along it; an arrow says the depth keeps going.
+    const over = pts.findIndex((p) => p.cum > yt.hi)
+    if (over > 0) pts = [...pts.slice(0, over), { d: pts[over].d, cum: yt.hi }]
+    const line = pts.map((p, i) => `${i ? 'L' : 'M'}${x(p.d).toFixed(1)},${y(p.cum).toFixed(1)}`).join('')
     const area = `${line}L${x(pts[pts.length - 1].d).toFixed(1)},${f.y0}L${f.x0},${f.y0}Z`
     svg.append(s('path', { d: area, stroke: 'none', style: { fill: css(`${c.key}-wash`) } }))
     svg.append(s('path', { d: line, fill: 'none', 'stroke-width': 2, 'stroke-linejoin': 'round', style: { stroke: css(c.key) } }))
+    if (over > 0) svg.append(s('text', { x: x(pts[pts.length - 1].d) + 4, y: f.y1 + 10 }, '↑'))
   }
   const ny = y(notional)
-  svg.append(s('line', { x1: f.x0, x2: f.x1, y1: ny, y2: ny, 'stroke-width': 1, style: { stroke: css('axis') } }))
+  svg.append(s('line', { x1: f.x0, x2: f.x1, y1: ny, y2: ny, 'stroke-width': 1, style: { stroke: css('muted') } }))
   svg.append(s('text', { x: f.x0 + 6, y: ny - 6 }, `Deine Größe ${fmt.usd(notional)}`))
 
   const valueAt = (c, d) => {

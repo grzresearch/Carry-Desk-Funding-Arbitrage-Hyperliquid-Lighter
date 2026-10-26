@@ -84,7 +84,7 @@ Die Detailansicht listet die zutreffenden Punkte je Paar auf. Keine Anlageberatu
 Keine Abhängigkeiten. Node ≥ 20 reicht für die Tests.
 
 ```bash
-npm test          # node --test, 63 Tests: Buch-Walk, Shortfall, Carry, Fees, Matching (gegen echten API-Snapshot), Rate-Limiter
+npm test          # node --test, 74 Tests: Buch-Walk, Shortfall, Carry, Fees, Matching (gegen echten API-Snapshot), Rate-Limiter
 npm run serve     # http://localhost:8080
 node scripts/snapshot.mjs > tests/fixtures/universe.json   # Test-Fixture aktualisieren
 ```

@@ -236,6 +236,12 @@ select {
   .live[data-state="ok"] .live-dot { animation: none; }
 }
 
+.live-api {
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+
 .live-meter {
   position: relative;
   width: 54px;
@@ -764,6 +770,23 @@ table.pairs {
 .status.idle svg { color: var(--muted); }
 .status.serious svg { color: var(--serious); }
 
+/* Tighter cells so the nine columns fit down to ~1280 px without sideways scrolling. */
+@media (max-width: 1365px) {
+  .pairs th,
+  .pairs td {
+    padding-left: 6px;
+    padding-right: 6px;
+  }
+
+  .asset {
+    min-width: 180px;
+  }
+
+  .asset-name .fullname {
+    max-width: 130px;
+  }
+}
+
 .costbar {
   display: flex;
   justify-content: flex-end;
@@ -779,7 +802,7 @@ table.pairs {
   min-width: 2px;
 }
 
-.costbar .spread { background: var(--axis); }
+.costbar .spread { background: var(--text-2); }
 .costbar .impact { background: var(--neg); }
 .costbar .fee { background: var(--muted); }
 
@@ -846,15 +869,22 @@ table.pairs {
   }
 }
 
-/* Zero-height sticky bar: the close button stays in view without taking layout space. */
+/* Sticky strip that keeps the close button in view; its negative margin gives the
+   space back so the content starts at the top. */
 .drawer-bar {
   position: sticky;
   top: 0;
   z-index: 3;
-  height: 0;
+  height: 56px;
+  margin-bottom: -56px;
   display: flex;
   justify-content: flex-end;
   padding-right: 16px;
+  pointer-events: none;
+}
+
+.drawer-bar .icon-btn {
+  pointer-events: auto;
 }
 
 .drawer-bar .icon-btn {
@@ -1038,6 +1068,11 @@ table.legs-table {
 
 .chart text {
   fill: var(--muted);
+  /* Halo in the card colour: lines and bars knock out behind labels instead of crossing them. */
+  paint-order: stroke;
+  stroke: var(--surface);
+  stroke-width: 3px;
+  stroke-linejoin: round;
   font-size: 11px;
   font-family: var(--font);
   font-variant-numeric: tabular-nums;
@@ -1330,6 +1365,10 @@ table.legs-table {
 
   .tile-value {
     font-size: 18px;
+  }
+
+  .tile-sub {
+    white-space: normal;
   }
 
   .detail {

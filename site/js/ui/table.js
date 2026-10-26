@@ -3,20 +3,22 @@
 import { h, icon, mount } from './dom.js'
 import * as fmt from '../core/format.js'
 import { STATUS_RANK } from '../core/evaluate.js'
-import { KIND, KIND_SHORT, KIND_HELP, CATEGORY, STATUS, DIRECTION, FUNDING_SOURCE, dexLabel } from './labels.js'
+import { KIND, KIND_SHORT, KIND_HELP, CATEGORY, STATUS, DIRECTION, FUNDING_SOURCE, dexLabel, statusLabel } from './labels.js'
 
+// Economics exist only for sizes the books can fill (evaluatePair drops them otherwise),
+// so rows that cannot fill sink below every priced row and rank among themselves by status.
 /** Sort keys: value extractor and natural direction. Nulls always sink. */
-export const SORTS = {
+export const SORTS = Object.assign(Object.create(null), {
   name: { get: (r) => r.pair.underlying, dir: 'asc' },
   funding: { get: (r) => r.fundingApr, dir: 'desc' },
   basis: { get: (r) => r.basis, dir: 'desc' },
-  cost: { get: (r) => r.trip?.costBps, dir: 'asc' },
-  breakeven: { get: (r) => (r.econ ? r.econ.breakEvenHours : null), dir: 'asc' },
+  cost: { get: (r) => (r.econ ? r.trip.costBps : null), dir: 'asc' },
+  breakeven: { get: (r) => r.econ?.breakEvenHours, dir: 'asc' },
   net: { get: (r) => r.econ?.netUsd, dir: 'desc' },
   optimal: { get: (r) => r.curve?.best?.netUsd, dir: 'desc' },
   depth: { get: (r) => r.curve?.capacity, dir: 'desc' },
   status: { get: (r) => -STATUS_RANK[r.status] * 1e12 + (r.econ?.netUsd ?? 0), dir: 'desc' },
-}
+})
 
 export function sortRows(rows, key, dir) {
   const { get } = SORTS[key] ?? SORTS.net
@@ -39,14 +41,16 @@ export function filterRows(rows, f) {
   const q = f.q.trim().toLowerCase()
   return rows.filter((r) => {
     const p = r.pair
+    // A match the real quotes contradict is not a pair at all.
+    if (r.status === 'mismatch') return false
     if (f.category !== 'all' && p.category !== f.category) return false
     if (f.issuer !== 'all' && (p.issuer ?? 'none') !== f.issuer) return false
     if (f.onlyProfitable && r.status !== 'profit') return false
     if (!f.showReverse && r.direction === 'reverse') return false
     if (q) {
-      const hay = [p.underlying, p.key, p.spot.coin, p.spot.base.name, p.spot.base.fullName, p.spot.quote, p.perp.coin, p.perp.dex, p.issuer, KIND[p.kind], CATEGORY[p.category]]
+      const hay = [p.underlying, p.key, p.spot.coin, `${p.spot.base.name}/${p.spot.quote}`, p.spot.base.fullName, p.perp.coin, p.perp.dex, p.issuer, KIND[p.kind], CATEGORY[p.category]]
         .filter(Boolean).join(' ').toLowerCase()
-      if (!q.split(/\s+/).every((t) => hay.includes(t))) return false
+      if (!q.split(/[\s⇄]+/).filter(Boolean).every((t) => hay.includes(t))) return false
     }
     return true
   })
@@ -56,10 +60,8 @@ const signClass = (x) => (x > 0 ? 'pos' : x < 0 ? 'neg' : null)
 
 function statusCell(r) {
   const st = STATUS[r.status]
-  const leg = r.missing === 'spot' ? 'Spot' : 'Perp'
-  const label = r.status === 'nobook' ? (r.oneSided ? `${leg}-Buch einseitig` : `${leg} ohne Orderbuch`) : st.label
   return h('td', { class: 'col-status', 'data-label': 'Status' },
-    h('div', { class: `status ${st.tone}` }, icon(st.icon), label),
+    h('div', { class: `status ${st.tone}` }, icon(st.icon), statusLabel(r)),
     h('div', { class: 'cell-sub', title: DIRECTION[r.direction] }, r.direction === 'carry' ? 'Spot ↑ · Perp ↓' : 'Spot ↓ · Perp ↑'))
 }
 
@@ -105,14 +107,16 @@ function row(r, settings, selectedId) {
     h('td', { class: 'num', 'data-label': 'Basis' },
       h('div', { class: 'cell-main' }, r.basis == null ? '–' : `${fmt.bps(r.basis, { sign: true })} bps`),
       h('div', { class: 'cell-sub' }, r.basis == null ? (p.kind === 'proxy' ? 'Proxy' : 'kein Preis') : r.basis >= 0 ? 'Perp über Spot' : 'Perp unter Spot')),
-    h('td', { class: 'num', 'data-label': 'Kosten Ein+Aus' },
-      trip
+    h('td', { class: 'num', 'data-label': 'Kosten Ein + Aus' },
+      econ
         ? [h('div', { class: 'cell-main' }, `${fmt.bps(trip.costBps)} bps`), h('div', { class: 'cell-sub' }, fmt.usd(trip.costUsd)), costBar(trip)]
-        : h('div', { class: 'cell-sub' }, '–')),
+        : trip
+          ? [h('div', { class: 'cell-main muted', title: 'Die sichtbare Tiefe füllt diese Größe nicht – Kosten unbekannt' }, 'unvollständig'), h('div', { class: 'cell-sub' }, `Fill ${fmt.pct(Math.min(...Object.values(trip.legs).map((l) => l.fillRatio)), { digits: 0 })}`)]
+          : h('div', { class: 'cell-sub' }, '–')),
     h('td', { class: 'num', 'data-label': 'Break-even' },
-      econ ? h('div', { class: 'cell-main' }, trip.complete ? fmt.duration(econ.breakEvenHours) : '–') : h('div', { class: 'cell-sub' }, '–')),
+      econ ? h('div', { class: 'cell-main' }, fmt.duration(econ.breakEvenHours)) : h('div', { class: 'cell-sub' }, '–')),
     h('td', { class: 'num', 'data-label': `Netto ${fmt.duration(settings.hours)}` },
-      econ && trip.complete
+      econ
         ? [h('div', { class: `cell-main ${signClass(econ.netUsd) ?? ''}` }, fmt.usd(econ.netUsd, { sign: true })), h('div', { class: 'cell-sub' }, `${fmt.pct(econ.netApr, { sign: true })} p.a.`)]
         : h('div', { class: 'cell-sub' }, '–')),
     h('td', { class: 'num', 'data-label': 'Optimale Größe' },
@@ -124,7 +128,7 @@ function row(r, settings, selectedId) {
         : h('div', { class: 'cell-sub' }, curve ? 'keine' : '–')),
     h('td', { class: 'num', 'data-label': 'Tiefe' },
       curve
-        ? [h('div', { class: 'cell-main' }, fmt.usd(curve.capacity)), h('div', { class: 'cell-sub' }, `Spot-Vol ${fmt.usd(p.spot.volume)}`)]
+        ? [h('div', { class: 'cell-main' }, `${curve.depthLimited ? '≥ ' : ''}${fmt.usd(curve.capacity)}`), h('div', { class: 'cell-sub' }, `Spot-Vol ${fmt.usd(p.spot.volume)}`)]
         : h('div', { class: 'cell-sub' }, `Spot-Vol ${fmt.usd(p.spot.volume)}`)),
     statusCell(r),
   ]
@@ -142,27 +146,36 @@ function tile(label, value, sub, { onClick } = {}) {
     h('div', { class: 'tile-sub' }, onClick ? h('button', { class: 'linkish', type: 'button', onclick: onClick }, sub) : sub))
 }
 
-export function renderTiles(el, rows, allPairs, unbacked, settings, onOpen) {
-  const priced = rows.filter((r) => r.econ && r.trip?.complete)
+const count = (n, one, many) => `${n} ${n === 1 ? one : many}`
+
+/** Overview of the rows currently shown (all counts follow the filters). */
+export function renderTiles(el, rows, unbacked, settings, onOpen, loading) {
+  const wait = '…'
+  const priced = rows.filter((r) => r.econ)
   const profitable = priced.filter((r) => r.status === 'profit')
   const best = profitable.reduce((a, r) => (!a || r.econ.netUsd > a.econ.netUsd ? r : a), null)
-  const underlyings = new Set(rows.map((r) => r.pair.key))
+  const underlyings = new Set(rows.map((r) => r.pair.key)).size
+  const dexes = new Set(rows.map((r) => r.pair.perp.dex || 'main')).size
   const equities = rows.filter((r) => r.pair.kind === 'tokenized-equity' || (r.pair.kind === 'proxy' && r.pair.category === 'equity'))
   const eqx = equities.filter((r) => r.pair.issuer === 'EQX')
-  const eqxLive = eqx.filter((r) => r.status !== 'nobook' && r.status !== 'loading')
+  const eqxTwo = eqx.filter((r) => r.status !== 'nobook' && r.status !== 'loading')
+  const eqxOne = eqx.filter((r) => r.status === 'nobook' && r.oneSided)
+  const noBooks = 'keine Paare mit zweiseitigem Buch'
   mount(el,
     h('div', { class: 'tile' },
       h('div', { class: 'tile-label' }, 'Spot ⇄ Perp-Paare'),
-      h('div', { class: 'tile-value' }, String(rows.length)),
+      h('div', { class: 'tile-value' }, loading && !rows.length ? wait : String(rows.length)),
       h('div', { class: 'tile-sub' },
-        `${underlyings.size} Underlyings · ${new Set(allPairs.map((p) => p.perp.dex || 'main')).size} Perp-Dexes`,
+        loading && !rows.length ? 'Lade Märkte …' : `${count(underlyings, 'Underlying', 'Underlyings')} · ${count(dexes, 'Perp-Dex', 'Perp-Dexes')}`,
         unbacked.length
           ? h('span', { title: `Ungedeckte Mirror-Token (gesamte Supply an eine Wallet geminted, keine Rücknahme) – kein Hedge: ${unbacked.join(', ')}` }, ` · ${unbacked.length} Mirror-Token ausgeschlossen`)
           : null)),
-    tile(`Lohnt sich bei ${fmt.usd(settings.notional)}`, `${profitable.length} von ${priced.length}`, `über ${fmt.duration(settings.hours)} inkl. Ein- und Ausstieg`),
+    tile(`Lohnt sich bei ${fmt.usd(settings.notional)}`, loading ? wait : `${profitable.length} von ${priced.length}`,
+      loading ? 'Orderbücher laden …' : rows.length && !priced.length ? noBooks : `über ${fmt.duration(settings.hours)} inkl. Ein- und Ausstieg`),
     best
-      ? tile('Bestes Netto', `${fmt.usd(best.econ.netUsd, { sign: true })}`, `${best.pair.underlying} · ${best.pair.spot.base.name} ⇄ ${best.pair.perp.coin} · ${fmt.pct(best.econ.netApr)} p.a.`, { onClick: () => onOpen(best.pair.id) })
-      : tile('Bestes Netto', '–', 'keine profitable Position bei dieser Größe'),
-    tile('Tokenisierte Aktien', `${equities.length} Paare`, eqx.length ? `EQX: ${eqx.length} Paare, ${eqxLive.length} mit Orderbuch` : 'EQX, xStocks und weitere'),
+      ? tile('Bestes Netto', fmt.usd(best.econ.netUsd, { sign: true }), `${best.pair.spot.base.name}/${best.pair.spot.quote} ⇄ ${best.pair.perp.coin} · ${fmt.pct(best.econ.netApr)} p.a.`, { onClick: () => onOpen(best.pair.id) })
+      : tile('Bestes Netto', loading ? wait : '–', loading ? 'Orderbücher laden …' : priced.length ? 'keine profitable Position bei dieser Größe' : rows.length ? noBooks : 'keine Paare für diese Filter'),
+    tile('Tokenisierte Aktien', loading && !rows.length ? wait : count(equities.length, 'Paar', 'Paare'),
+      eqx.length ? `EQX: ${count(eqx.length, 'Paar', 'Paare')}, ${eqxTwo.length} handelbar${eqxOne.length ? `, ${eqxOne.length} einseitig` : ''}` : 'EQX, xStocks und weitere'),
   )
 }

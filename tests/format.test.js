@@ -15,8 +15,9 @@ test('parseAmount reads German and shorthand amounts', () => {
 
 test('formatters use German conventions and a true minus', () => {
   assert.equal(usd(1234.5), '$1.235')
-  assert.equal(usd(-12.3), '−$12,30')
-  assert.equal(usd(12, { sign: true }), '+$12,00')
+  assert.equal(usd(-12.3), '−$12')
+  assert.equal(usd(-2.3), '−$2,30')
+  assert.equal(usd(12, { sign: true }), '+$12')
   assert.equal(bps(12.345), '12,3')
   assert.equal(pct(0.1095), '10,95 %')
   assert.equal(duration(30), '30 h')
@@ -24,4 +25,5 @@ test('formatters use German conventions and a true minus', () => {
   assert.equal(duration(Infinity), '∞')
   assert.equal(usd(NaN), '–')
   assert.equal(price(80113.5), '80.113,5')
+  assert.equal(price(762.3), '762,30')
 })

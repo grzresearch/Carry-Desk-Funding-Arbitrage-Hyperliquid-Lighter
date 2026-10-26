@@ -70,21 +70,39 @@ export function logGrid(lo, hi, steps) {
  * horizon is concave in size. Trace it across the visible depth and report the size
  * that earns the most and the largest size that still earns anything.
  */
-export function sizeCurve({ spotBook, perpBook, direction, hourlyRate, hours, spotFeeBps, perpFeeBps, basis, basisMode, leverage, minNotional = 50, steps = 56 }) {
+export function sizeCurve({ spotBook, perpBook, direction, hourlyRate, hours, spotFeeBps, perpFeeBps, spotRef, perpRef, basis, basisMode, leverage, minNotional = 50, steps = 56 }) {
   const cap = capacity({ spotBook, perpBook, direction })
   if (!(cap > minNotional)) return { capacity: cap, points: [], best: null, maxProfitable: null, depthLimited: false }
+  const netAt = (notional) => {
+    const trip = roundTrip({ spotBook, perpBook, notional, direction, spotFeeBps, perpFeeBps, spotRef, perpRef })
+    if (!trip?.complete) return null
+    const econ = carryEconomics({ trip, hourlyRate, hours, basis, basisMode, leverage })
+    return { notional, netUsd: econ.netUsd, costBps: trip.costBps, netApr: econ.netApr }
+  }
   const points = []
   for (const notional of logGrid(minNotional, cap, steps)) {
-    const trip = roundTrip({ spotBook, perpBook, notional, direction, spotFeeBps, perpFeeBps })
-    if (!trip?.complete) break
-    const econ = carryEconomics({ trip, hourlyRate, hours, basis, basisMode, leverage })
-    points.push({ notional, netUsd: econ.netUsd, costBps: trip.costBps, netApr: econ.netApr })
+    const point = netAt(notional)
+    if (!point) break
+    points.push(point)
   }
   let best = null
   let maxProfitable = null
   for (const p of points) {
     if (p.netUsd > 0 && (!best || p.netUsd > best.netUsd)) best = p
     if (p.netUsd > 0) maxProfitable = p
+  }
+  // Grid points sit ~15 % apart: bisect to the real break-even size, so a profitable
+  // chosen size never lies beyond the reported maximum.
+  const next = maxProfitable && points[points.indexOf(maxProfitable) + 1]
+  if (next) {
+    let lo = maxProfitable.notional
+    let hi = next.notional
+    for (let k = 0; k < 30; k++) {
+      const mid = Math.sqrt(lo * hi)
+      if ((netAt(mid)?.netUsd ?? -1) > 0) lo = mid
+      else hi = mid
+    }
+    maxProfitable = netAt(lo)
   }
   // Still rising at the last visible level: the true optimum lies beyond the data.
   const depthLimited = Boolean(best) && best === points[points.length - 1]

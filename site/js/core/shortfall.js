@@ -20,16 +20,18 @@ export const PLANS = {
 
 export const LEGS = ['spotEntry', 'perpEntry', 'spotExit', 'perpExit']
 
-/** Shortfall of one market order of `qty` base units. Null when the book has no mid. */
-export function legShortfall(book, side, qty, feeBps) {
-  const mid = midPrice(book)
-  if (!mid || !(qty > 0)) return null
+/**
+ * Shortfall of one market order of `qty` base units against the arrival price `ref`
+ * (the mid unless the caller knows better). Null when the book is not two-sided.
+ */
+export function legShortfall(book, side, qty, feeBps, ref = midPrice(book)) {
+  if (!ref || !midPrice(book) || !(qty > 0)) return null
   const levels = side === 'buy' ? book.asks : book.bids
   const best = levels[0].px
   const sign = side === 'buy' ? 1 : -1
   const fill = walk(levels, qty)
-  const arrival = qty * mid
-  const spread = fill.filled * sign * (best - mid)
+  const arrival = qty * ref
+  const spread = fill.filled * sign * (best - ref)
   const impact = sign * (fill.notional - fill.filled * best)
   const fee = (fill.notional * feeBps) / 1e4
   const total = spread + impact + fee
@@ -37,7 +39,7 @@ export function legShortfall(book, side, qty, feeBps) {
   return {
     side,
     qty,
-    mid,
+    mid: ref, // arrival price
     best,
     vwap: fill.vwap,
     worstPx: fill.worstPx,
@@ -51,23 +53,36 @@ export function legShortfall(book, side, qty, feeBps) {
   }
 }
 
+/** Spreads wider than this make a mid meaningless (e.g. a lone lowball bid at a listing). */
+export const WIDE_SPREAD_BPS = 200
+
+/**
+ * Arrival price of a leg: the mid, unless the book is so wide that its mid says nothing
+ * — then the fair price (e.g. the hedge leg's price) clamped into the quotes. Round-trip
+ * cost does not depend on this choice (each leg's mid cancels between entry and exit);
+ * it only keeps the sizing and the per-order attribution honest on broken books.
+ */
+export function arrivalPrice(book, fair) {
+  const mid = midPrice(book)
+  if (!mid || !(fair > 0) || ((book.asks[0].px - book.bids[0].px) / mid) * 1e4 <= WIDE_SPREAD_BPS) return mid
+  return Math.min(book.asks[0].px, Math.max(book.bids[0].px, fair))
+}
+
 /**
  * Enter and later exit a hedge of `notional` per leg, assuming the exit meets a book
  * like today's. Returns the four legs, their summed cost, and whether the visible
- * depth can absorb the size at all.
+ * depth can absorb the size at all. `spotRef`/`perpRef` default to the mids.
  */
-export function roundTrip({ spotBook, perpBook, notional, direction, spotFeeBps, perpFeeBps }) {
-  const spotMid = midPrice(spotBook)
-  const perpMid = midPrice(perpBook)
-  if (!spotMid || !perpMid || !(notional > 0)) return null
+export function roundTrip({ spotBook, perpBook, notional, direction, spotFeeBps, perpFeeBps, spotRef = midPrice(spotBook), perpRef = midPrice(perpBook) }) {
+  if (!spotRef || !perpRef || !midPrice(spotBook) || !midPrice(perpBook) || !(notional > 0)) return null
   const plan = PLANS[direction]
-  const spotQty = notional / spotMid
-  const perpQty = notional / perpMid
+  const spotQty = notional / spotRef
+  const perpQty = notional / perpRef
   const legs = {
-    spotEntry: legShortfall(spotBook, plan.spotEntry, spotQty, spotFeeBps),
-    perpEntry: legShortfall(perpBook, plan.perpEntry, perpQty, perpFeeBps),
-    spotExit: legShortfall(spotBook, plan.spotExit, spotQty, spotFeeBps),
-    perpExit: legShortfall(perpBook, plan.perpExit, perpQty, perpFeeBps),
+    spotEntry: legShortfall(spotBook, plan.spotEntry, spotQty, spotFeeBps, spotRef),
+    perpEntry: legShortfall(perpBook, plan.perpEntry, perpQty, perpFeeBps, perpRef),
+    spotExit: legShortfall(spotBook, plan.spotExit, spotQty, spotFeeBps, spotRef),
+    perpExit: legShortfall(perpBook, plan.perpExit, perpQty, perpFeeBps, perpRef),
   }
   let costUsd = 0
   let complete = true

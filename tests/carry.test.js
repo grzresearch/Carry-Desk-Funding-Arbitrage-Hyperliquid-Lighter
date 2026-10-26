@@ -89,3 +89,13 @@ test('sizeCurve flags an optimum that is only the end of the visible book', () =
   assert.equal(curve.depthLimited, true)
   assert.equal(curve.best, curve.points[curve.points.length - 1])
 })
+
+test('maxProfitable is the real break-even size, not the last grid point', () => {
+  const levels = (start, step) => Array.from({ length: 40 }, (_, i) => ({ px: start + step * i, sz: 1 }))
+  const book = { bids: levels(99.95, -1), asks: levels(100.05, 1) }
+  const args = { spotBook: book, perpBook: book, direction: 'carry', hourlyRate: 0.0005, hours: 168, spotFeeBps: 0, perpFeeBps: 0 }
+  const curve = sizeCurve(args)
+  const net = (n) => carryEconomics({ trip: roundTrip({ ...args, notional: n }), hourlyRate: 0.0005, hours: 168 }).netUsd
+  assert.ok(net(curve.maxProfitable.notional) > 0)
+  assert.ok(net(curve.maxProfitable.notional * 1.01) <= 0)
+})

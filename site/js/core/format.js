@@ -12,11 +12,11 @@ function nf(options) {
 const DASH = '–'
 const finite = (x) => typeof x === 'number' && Number.isFinite(x)
 
-/** $ amounts: cents below 100, whole dollars below a million, then "Mio."/"Mrd.". */
+/** $ amounts: cents only below $10, whole dollars below a million, then "Mio."/"Mrd.". */
 export function usd(x, { sign = false, axis = false } = {}) {
   if (!finite(x)) return DASH
   const abs = Math.abs(x)
-  const cents = abs < 100 && !axis && abs !== 0
+  const cents = abs < 10 && !axis && abs !== 0
   const opts = abs >= 1e6
     ? { notation: 'compact', maximumFractionDigits: abs >= 1e7 ? 1 : 2 }
     : { maximumFractionDigits: cents ? 2 : 0, minimumFractionDigits: cents ? 2 : 0 }
@@ -30,7 +30,8 @@ export function price(x) {
   if (!finite(x)) return DASH
   const abs = Math.abs(x)
   const digits = abs >= 1000 ? 1 : abs >= 1 ? Math.min(4, 5 - Math.floor(Math.log10(abs)) - 1) : Math.min(10, 4 - Math.floor(Math.log10(abs)))
-  return nf({ maximumFractionDigits: Math.max(0, digits), minimumFractionDigits: 0 }).format(x)
+  const d = Math.max(0, digits)
+  return nf({ maximumFractionDigits: d, minimumFractionDigits: d }).format(x)
 }
 
 export function bps(x, { sign = false, digits = 1 } = {}) {

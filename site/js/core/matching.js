@@ -220,11 +220,19 @@ export function matchPairs(universe, { deployers = new Map() } = {}) {
         return { ...e, deviation }
       })
       const tol = TOLERANCE[cand.evidence]
-      const accepted = checked.filter((e) => {
+      const accepted = []
+      for (const e of checked) {
         // Without a spot price only issuer conventions and curated overrides count.
-        if (e.deviation == null) return cand.evidence === 'strong'
-        return Math.abs(e.deviation) <= (e.proxy ? TOLERANCE.proxy : tol)
-      })
+        if (e.deviation == null) {
+          if (cand.evidence === 'strong') accepted.push(e)
+        } else if (Math.abs(e.deviation) <= (e.proxy ? TOLERANCE.proxy : tol)) {
+          accepted.push(e)
+        } else if (cand.evidence === 'strong' && !e.proxy) {
+          // A context mid between a stale lowball bid and the first fair ask is no price.
+          // Issuer conventions survive it; the real bid/ask decides (evaluatePair).
+          accepted.push({ ...e, verify: 'book' })
+        }
+      }
       if (!accepted.length) continue
       result = { ...cand, key, proxy: Boolean(proxy), perps: accepted, spotPx }
       break
@@ -243,7 +251,7 @@ export function matchPairs(universe, { deployers = new Map() } = {}) {
     }
     const res = resolve(spot.base)
     if (!res) continue
-    for (const { perp, units, proxy, deviation } of res.perps) {
+    for (const { perp, units, proxy, deviation, verify } of res.perps) {
       const kind = proxy ? 'proxy' : res.kind
       pairs.push({
         id: `${spot.coin}|${perp.coin}`,
@@ -256,8 +264,9 @@ export function matchPairs(universe, { deployers = new Map() } = {}) {
         issuer: res.issuer,
         evidence: res.evidence,
         deviation,
+        verify: verify ?? null,
         quoteUsd: usd.get(spot.quote) ?? 1,
-        flagged: deviation != null && Math.abs(deviation) > TOLERANCE.flag,
+        flagged: !verify && deviation != null && Math.abs(deviation) > TOLERANCE.flag,
         category: categoryOf(res.key, res.kind, perp),
       })
     }

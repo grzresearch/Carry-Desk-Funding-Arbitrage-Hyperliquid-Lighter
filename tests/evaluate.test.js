@@ -76,3 +76,28 @@ test('proxies carry no basis; quotes are converted to USD for basis', () => {
   const r = evaluatePair({ ...pair, quoteUsd: 0.998 }, ctx(books))
   assert.ok(Math.abs(r.basis - (100 / 99.8 - 1) * 1e4) < 1e-6)
 })
+
+test('a size the books cannot fill carries no economics', () => {
+  const thin = { bids: [{ px: 99, sz: 1 }], asks: [{ px: 101, sz: 1 }] }
+  const r = evaluatePair(pair, ctx({ S: thin, P: deep(100.1, 0.01, 0.01) }))
+  assert.equal(r.status, 'thin')
+  assert.equal(r.econ, null)
+  assert.ok(r.trip)
+})
+
+test('a lowball bid at a listing does not skew sizing: the arrival price is the fair price', () => {
+  // EQX-style launch: one stale bid at 2, the first fair ask at 101.
+  const listing = { bids: [{ px: 2, sz: 1000 }], asks: [{ px: 101, sz: 1000 }, { px: 102, sz: 1000 }] }
+  const r = evaluatePair(pair, ctx({ S: listing, P: deep(100.1, 0.01, 0.01) }))
+  assert.ok(Math.abs(r.spotMid - 100.1) < 0.2, `arrival ${r.spotMid}`)
+  assert.ok(Math.abs(r.trip.spotQty - 1000 / 100.1) < 0.1)
+  assert.ok(Math.abs(r.basis) < 30)
+})
+
+test('a strong match the real quotes contradict is dropped as a mismatch', () => {
+  const far = { bids: [{ px: 0.3, sz: 1000 }], asks: [{ px: 0.31, sz: 1000 }] }
+  const r = evaluatePair({ ...pair, verify: 'book' }, ctx({ S: far, P: deep(100.1, 0.01, 0.01) }))
+  assert.equal(r.status, 'mismatch')
+  const ok = evaluatePair({ ...pair, verify: 'book' }, ctx({ S: deep(100, 0.01, 0.01), P: deep(100.1, 0.01, 0.01) }))
+  assert.notEqual(ok.status, 'mismatch')
+})

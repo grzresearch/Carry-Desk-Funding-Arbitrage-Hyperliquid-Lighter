@@ -22,7 +22,8 @@
     <div class="live" id="live" aria-live="polite">
       <span class="live-dot" aria-hidden="true"></span>
       <span id="live-text">Verbinde …</span>
-      <span class="live-meter" id="live-meter" title="API-Gewicht der letzten Minute (Limit 1200 pro IP)"></span>
+      <span class="live-api" aria-hidden="true">API</span>
+      <span class="live-meter" id="live-meter" role="meter" aria-label="API-Gewicht der letzten Minute" aria-valuemin="0" aria-valuemax="1200" aria-valuenow="0" title="API-Gewicht der letzten Minute (Limit 1200 pro IP)"></span>
       <button class="icon-btn" id="refresh" type="button" title="Jetzt aktualisieren" aria-label="Jetzt aktualisieren">
         <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16 10a6 6 0 1 1-1.76-4.24M16 3.5V6h-2.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
@@ -89,7 +90,7 @@
             <th scope="col" data-sort="name" class="col-asset">Asset · Legs</th>
             <th scope="col" data-sort="funding" class="num">Funding p.a.</th>
             <th scope="col" data-sort="basis" class="num">Basis</th>
-            <th scope="col" data-sort="cost" class="num">Kosten Ein+Aus</th>
+            <th scope="col" data-sort="cost" class="num" title="Implementation Shortfall für Ein- und Ausstieg beider Legs. Balken: Spread (grau) · Impact (rot) · Gebühren (hell)">Kosten Ein + Aus</th>
             <th scope="col" data-sort="breakeven" class="num">Break-even</th>
             <th scope="col" data-sort="net" class="num">Netto</th>
             <th scope="col" data-sort="optimal" class="num">Optimale Größe</th>
@@ -103,7 +104,7 @@
     </div>
   </main>
 
-  <aside class="drawer" id="drawer" aria-hidden="true" aria-labelledby="drawer-title">
+  <aside class="drawer" id="drawer" aria-hidden="true" inert aria-labelledby="drawer-title">
     <div class="drawer-scrim" data-close></div>
     <div class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="drawer-title" tabindex="-1">
       <div class="drawer-bar">

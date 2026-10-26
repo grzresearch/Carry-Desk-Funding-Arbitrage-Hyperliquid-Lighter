@@ -58,8 +58,18 @@ function readHash() {
     if (typeof v === 'number' && !Number.isFinite(v)) continue
     out[key] = v
   }
+  // Links are user input: anything unknown falls back to the default.
+  const allowed = (options, v) => options.some(([x]) => x === v)
   out.notional = Math.min(1e8, Math.max(10, out.notional))
   if (!SORTS[out.sort]) out.sort = 'net'
+  if (out.dir !== 'asc' && out.dir !== 'desc') out.dir = SORTS[out.sort].dir
+  if (!allowed(HORIZONS, out.hours)) out.hours = DEFAULTS.hours
+  if (!allowed(FUNDING_BASES, out.fundingBasis)) out.fundingBasis = DEFAULTS.fundingBasis
+  if (!allowed(BASIS_MODES, out.basisMode)) out.basisMode = DEFAULTS.basisMode
+  if (!allowed(CATEGORIES, out.category)) out.category = DEFAULTS.category
+  if (!LEVERAGES.includes(out.leverage)) out.leverage = DEFAULTS.leverage
+  if (!(out.tier >= 0 && out.tier < VOLUME_TIERS.length)) out.tier = DEFAULTS.tier
+  if (!(out.staking >= 0 && out.staking < STAKING_DISCOUNTS.length)) out.staking = DEFAULTS.staking
   return out
 }
 
@@ -110,7 +120,7 @@ function renderControls() {
   const input = $('notional')
   if (document.activeElement !== input) input.value = new Intl.NumberFormat('de-DE').format(settings.notional)
   mount($('notional-chips'), NOTIONAL_CHIPS.map((n) =>
-    h('button', { type: 'button', class: 'chip', 'aria-pressed': String(n === settings.notional), onclick: () => set({ notional: n }) }, fmt.compact(n))))
+    h('button', { type: 'button', class: 'chip', 'aria-pressed': String(n === settings.notional), onclick: () => set({ notional: n }) }, fmt.usd(n))))
   segmented($('hours'), HORIZONS, settings.hours, (v) => set({ hours: v }))
   segmented($('funding-basis'), FUNDING_BASES, settings.fundingBasis, (v) => set({ fundingBasis: v }))
   segmented($('basis-mode'), BASIS_MODES, settings.basisMode, (v) => set({ basisMode: v }))
@@ -121,7 +131,7 @@ function renderControls() {
   $('fees-summary').textContent = `Spot ${fmt.bps(rates.spot, { digits: 2 })} · Perp ${fmt.bps(rates.perp, { digits: 2 })} bps`
   const tier = $('fee-tier')
   if (!tier.options.length) {
-    VOLUME_TIERS.forEach((label, i) => tier.append(new Option(`${label} (Spot ${SPOT_TAKER_BPS[i]} / Perp ${PERP_TAKER_BPS[i]} bps)`, i)))
+    VOLUME_TIERS.forEach((label, i) => tier.append(new Option(`${label} (Spot ${fmt.bps(SPOT_TAKER_BPS[i], { digits: 2 })} / Perp ${fmt.bps(PERP_TAKER_BPS[i], { digits: 2 })} bps)`, i)))
     STAKING_DISCOUNTS.forEach((s, i) => $('fee-staking').append(new Option(s.discount ? `${s.name} (−${s.discount * 100} %)` : s.name, i)))
     LEVERAGES.forEach((l) => $('leverage').append(new Option(`${l}×`, l)))
   }
@@ -257,8 +267,15 @@ function render() {
   evaluateAll()
   renderIssuers()
   const visible = sortRows(filterRows(rows, settings), settings.sort, settings.dir)
-  renderTiles($('tiles'), visible, data.pairs, data.unbacked, settings, openPair)
-  renderRows($('rows'), visible, settings, settings.pair)
+  renderTiles($('tiles'), visible, data.unbacked, settings, openPair, data.busy && !data.updatedAt)
+  // Rows are rebuilt on every tick: carry keyboard focus over to the new row.
+  const tbody = $('rows')
+  const focusId = tbody.contains(document.activeElement) ? document.activeElement.dataset.id : returnFocusId
+  returnFocusId = null
+  renderRows(tbody, visible, settings, settings.pair)
+  if (focusId != null && !settings.pair) {
+    ;(tbody.querySelector(`tr[data-id="${CSS.escape(focusId)}"]`) ?? tbody.firstElementChild)?.focus({ preventScroll: true })
+  }
   const empty = $('empty')
   empty.hidden = visible.length > 0
   if (!visible.length) empty.textContent = data.pairs.length ? 'Keine Paare für diese Filter.' : data.error ? 'Die Hyperliquid-API ist gerade nicht erreichbar – neuer Versuch beim nächsten Update.' : 'Lade Märkte …'
@@ -270,11 +287,15 @@ function render() {
 
 /** Ask the data layer for deeper books and funding history where they matter. */
 function requestData(visible) {
-  const deeper = []
+  const thin = []
+  const limited = []
   for (const r of visible) {
-    if (r.status === 'thin' || r.curve?.depthLimited) deeper.push(r.pair.spot.coin, r.pair.perp.coin)
+    if (r.status === 'thin') thin.push(r.pair.spot.coin, r.pair.perp.coin)
+    else if (r.curve?.depthLimited) limited.push(r.pair.spot.coin, r.pair.perp.coin)
   }
-  data.wantDepth(deeper, settings.notional)
+  data.wantDepth(thin, settings.notional)
+  // Net still rises at the edge of the 20 visible levels: fetch the tail whatever the size.
+  data.wantDepth(limited, Infinity)
   if (data.updatedAt) data.wantHistory(visible.filter((r) => r.status !== 'nobook').map((r) => r.pair.perp.coin))
 }
 
@@ -283,6 +304,7 @@ function renderStatus() {
   const usage = data.usage()
   $('live-meter').style.setProperty('--fill', `${Math.min(100, (usage / 1200) * 100)}%`)
   $('live-meter').title = `API-Gewicht der letzten Minute: ${usage} von 1200 (Limit pro IP)`
+  $('live-meter').setAttribute('aria-valuenow', String(usage))
   $('refresh').classList.toggle('spinning', data.busy)
   if (data.error && !data.updatedAt) {
     live.dataset.state = 'error'
@@ -302,14 +324,23 @@ function renderStatus() {
 // ── detail drawer ───────────────────────────────────────────
 
 let detailTimer = null
-let lastFocus = null
+let lastFocusId = null // row that opened the drawer
+let returnFocusId = null // row to focus after the next render
+
+/** While the drawer is open, everything behind it is inert (no focus, no clicks). */
+function setModal(open) {
+  const drawer = $('drawer')
+  drawer.inert = !open
+  for (const el of document.body.children) if (el !== drawer && el.id !== 'tooltip') el.inert = open
+}
 
 function openPair(id) {
   if (!data.pairs.some((p) => p.id === id)) return
-  if (!settings.pair) lastFocus = document.activeElement
+  if (!settings.pair) lastFocusId = document.activeElement?.closest?.('#rows tr[data-id]')?.dataset.id ?? id
   set({ pair: id })
   const drawer = $('drawer')
   drawer.setAttribute('aria-hidden', 'false')
+  setModal(true)
   document.body.style.overflow = 'hidden'
   requestAnimationFrame(() => drawer.querySelector('.drawer-panel').focus())
   const pair = data.pairs.find((p) => p.id === id)
@@ -327,9 +358,11 @@ function closePair() {
   detailTimer = null
   hideTooltip()
   $('drawer').setAttribute('aria-hidden', 'true')
+  setModal(false)
   document.body.style.overflow = ''
+  returnFocusId = lastFocusId ?? settings.pair // deep links fall back to the pair's own row
+  lastFocusId = null
   set({ pair: null })
-  lastFocus?.focus?.()
 }
 
 function renderOpenDetail() {
@@ -340,9 +373,17 @@ function renderOpenDetail() {
     openPair(settings.pair)
     return
   }
+  // The drawer is rebuilt on every tick: keep scroll, open <details> and focus.
   const panel = drawer.querySelector('.drawer-panel')
+  const el = $('detail')
   const scroll = panel.scrollTop
-  renderDetail($('detail'), r, settings, data)
+  const focusables = () => [...el.querySelectorAll('a[href], button, summary')]
+  const focusIdx = focusables().indexOf(document.activeElement)
+  const open = [...el.querySelectorAll('details')].map((d) => d.open)
+  hideTooltip()
+  renderDetail(el, r, settings, data)
+  el.querySelectorAll('details').forEach((d, i) => open[i] && (d.open = true))
+  if (focusIdx >= 0) focusables()[focusIdx]?.focus({ preventScroll: true })
   panel.scrollTop = scroll
 }
 

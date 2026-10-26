@@ -4,9 +4,10 @@
 import { h, icon, mount } from './dom.js'
 import * as fmt from '../core/format.js'
 import { LEGS, PLANS } from '../core/shortfall.js'
+import { sideDepth } from '../core/book.js'
 import { fundingRate } from '../core/evaluate.js'
 import { sizeCurveChart, depthChart, fundingChart } from './charts.js'
-import { KIND, KIND_HELP, CATEGORY, STATUS, DIRECTION, LEG, SIDE, FUNDING_SOURCE, dexLabel } from './labels.js'
+import { KIND, KIND_HELP, CATEGORY, STATUS, DIRECTION, LEG, SIDE, FUNDING_SOURCE, dexLabel, statusLabel } from './labels.js'
 
 const APP = 'https://app.hyperliquid.xyz/trade/'
 
@@ -61,43 +62,46 @@ function waterfall(r) {
       h('span', { class: `num ${st.value >= 0 ? 'pos' : 'neg'}` }, fmt.usd(st.value, { sign: true })))),
     h('div', { class: 'wf-row' },
       h('strong', null, 'Netto'),
-      h('div', { class: 'wf-track' }, bar(0, econ.netUsd, 'var(--net)')),
+      h('div', { class: 'wf-track' }, bar(0, econ.netUsd, econ.netUsd >= 0 ? 'var(--net)' : 'var(--neg)')),
       h('span', { class: `num ${econ.netUsd >= 0 ? 'pos' : 'neg'}` }, fmt.usd(econ.netUsd, { sign: true }))))
 }
 
+// Results first (cost, fill), mechanics after: the table scrolls sideways on small
+// screens, and what matters must be visible without scrolling.
 function legsTable(trip) {
-  const head = ['Leg', 'Order', 'Menge', 'Mid', 'VWAP', 'Schlechtester Px', 'Spread', 'Impact', 'Gebühr', 'Summe', 'Kosten', 'Levels', 'Fill']
+  const head = ['Leg', 'Summe bps', 'Kosten', 'Fill', 'Spread', 'Impact', 'Gebühr', 'Order', 'Menge', 'Ref.-Preis', 'VWAP', 'Schlechtester Px', 'Levels']
   const rows = LEGS.map((key) => {
     const leg = trip.legs[key]
     return h('tr', null,
       h('td', null, h('i', { class: `leg-key ${key.startsWith('spot') ? 'spot' : 'perp'}` }), LEG[key]),
+      h('td', null, h('strong', null, fmt.bps(leg.bps.total))),
+      h('td', null, fmt.usd(leg.cost.total)),
+      h('td', { class: leg.complete ? null : 'neg' }, fmt.pct(leg.fillRatio, { digits: 0 })),
+      h('td', null, fmt.bps(leg.bps.spread)),
+      h('td', null, fmt.bps(leg.bps.impact)),
+      h('td', null, fmt.bps(leg.bps.fee)),
       h('td', null, SIDE[leg.side]),
       h('td', null, fmt.qty(leg.filled)),
       h('td', null, fmt.price(leg.mid)),
       h('td', null, fmt.price(leg.vwap)),
       h('td', null, fmt.price(leg.worstPx)),
-      h('td', null, fmt.bps(leg.bps.spread)),
-      h('td', null, fmt.bps(leg.bps.impact)),
-      h('td', null, fmt.bps(leg.bps.fee)),
-      h('td', null, h('strong', null, fmt.bps(leg.bps.total))),
-      h('td', null, fmt.usd(leg.cost.total)),
-      h('td', null, String(leg.levelsUsed)),
-      h('td', { class: leg.complete ? null : 'neg' }, fmt.pct(leg.fillRatio, { digits: 0 })))
+      h('td', null, String(leg.levelsUsed)))
   })
   const sum = (f) => LEGS.reduce((a, k) => a + f(trip.legs[k]), 0)
   return h('div', { class: 'legs-scroll card' },
     h('table', { class: 'legs-table' },
       h('caption', { class: 'sr-only' }, 'Implementation Shortfall je Leg in Basispunkten der Positionsgröße'),
-      h('thead', null, h('tr', null, head.map((c) => h('th', { scope: 'col' }, c)))),
+      h('thead', null, h('tr', null, head.map((c) => h('th', { scope: 'col', title: c === 'Ref.-Preis' ? 'Ankunftspreis: das Mid zum Entscheidungszeitpunkt (bei extrem breitem Buch der faire Preis, in die Quotes geklemmt)' : null }, c)))),
       h('tbody', null, rows),
       h('tfoot', null, h('tr', null,
-        h('td', null, 'Ein + Aus'), h('td'), h('td'), h('td'), h('td'), h('td'),
+        h('td', null, 'Ein + Aus'),
+        h('td', null, trip.complete ? `${fmt.bps(trip.costBps)}` : '–'),
+        h('td', null, trip.complete ? fmt.usd(trip.costUsd) : 'unvollständig'),
+        h('td'),
         h('td', null, fmt.bps(sum((l) => l.bps.spread))),
         h('td', null, fmt.bps(sum((l) => l.bps.impact))),
         h('td', null, fmt.bps(sum((l) => l.bps.fee))),
-        h('td', null, `${fmt.bps(trip.costBps)} bps`),
-        h('td', null, fmt.usd(trip.costUsd)),
-        h('td'), h('td')))))
+        h('td'), h('td'), h('td'), h('td'), h('td'), h('td')))))
 }
 
 function sizeTable(points) {
@@ -116,15 +120,19 @@ function risks(r, settings, history) {
   const out = []
   const add = (tone, text) => out.push({ tone, text })
   if (r.direction === 'reverse') add('warn', 'Negatives Funding: verdient wird mit Short Spot · Long Perp. Dafür brauchst du den Spot-Token bereits im Bestand (oder eine Leihe) – sonst ist die Position nicht umsetzbar.')
-  add(p.kind === 'native' ? 'info' : 'warn', KIND_HELP[p.kind])
   if (p.evidence === 'weak') add('warn', 'Zuordnung nur über den Ticker und den Preisabgleich – kein bekannter Emittent. Prüfe, ob der Spot-Token wirklich einen Anspruch auf das Underlying verbrieft.')
+  else add(p.kind === 'native' ? 'info' : 'warn', KIND_HELP[p.kind])
   if (p.flagged) add('warn', `Spot und Perp weichen um ${fmt.pct(Math.abs(p.deviation))} voneinander ab – entweder eine echte Basis-Chance oder ein Hinweis, dass die Assets nicht identisch sind.`)
+  // The perp leg is short in a carry and long in a reverse trade: it dies on the opposite move.
+  const rev = r.direction === 'reverse'
+  const side = rev ? 'Long' : 'Short'
+  const move = rev ? 'Kursrückgang' : 'Kursanstieg'
   if (p.perp.onlyIsolated) {
     const mm = 1 / (2 * (p.perp.maxLeverage || 1))
     const dist = Math.max(0, 1 / settings.leverage - mm)
-    add('warn', `Perp nur mit isolierter Margin: der Spot-Bestand zählt nicht als Sicherheit. Ein Short mit ${settings.leverage}× wird grob bei +${fmt.pct(dist, { digits: 0 })} Kursanstieg liquidiert – Margin nachschießen oder Hebel senken.`)
+    add('warn', `Perp nur mit isolierter Margin: der Spot-Bestand zählt nicht als Sicherheit. Ein ${side} mit ${settings.leverage}× wird grob bei ${rev ? '−' : '+'}${fmt.pct(dist, { digits: 0 })} ${move} liquidiert – Margin nachschießen oder Hebel senken.`)
   } else {
-    add('info', `Perp-Short mit ${settings.leverage}× Hebel: bei starkem Kursanstieg droht Liquidation, bevor der Spot-Gewinn gegengerechnet ist (außer bei Portfolio-Margin).`)
+    add('info', `Perp-${side} mit ${settings.leverage}× Hebel: bei starkem ${move} droht Liquidation, bevor der Gewinn auf dem Spot-Leg gegengerechnet ist (außer bei Portfolio-Margin).`)
   }
   const maxMarket = (p.perp.maxLeverage ?? 1) >= 25 ? 30e6 : p.perp.maxLeverage >= 20 ? 5e6 : p.perp.maxLeverage >= 10 ? 2e6 : 5e5
   if (settings.notional > maxMarket) add('warn', `Eine einzelne Market-Order auf diesem Perp ist auf ${fmt.usd(maxMarket)} begrenzt (abhängig vom Max-Hebel) – die Position muss in mehrere Orders aufgeteilt werden.`)
@@ -157,6 +165,24 @@ function fundingSection(r, history, width) {
       fundingChart({ history, average: avg7, width })))
 }
 
+/** What the missing or one-sided book looks like, so a listing can be followed live. */
+function bookMessage(r, data) {
+  const p = r.pair
+  if (r.status === 'loading') return 'Orderbücher werden geladen …'
+  if (r.status === 'mismatch') return 'Die echten Quotes des Spot-Markts passen nicht zum Perp – kein Hedge.'
+  const legName = r.missing === 'spot' ? 'Spot' : 'Perp'
+  const book = data.books.get(r.missing === 'spot' ? p.spot.coin : p.perp.coin)
+  if (r.oneSided && book) {
+    const side = book.bids?.length ? 'bids' : 'asks'
+    const levels = book[side]
+    const [have, best, lack] = side === 'bids' ? ['Bids', 'bester Bid', 'Asks'] : ['Asks', 'bester Ask', 'Bids']
+    return `Das ${legName}-Buch ist einseitig: nur ${have} (${best} ${fmt.price(levels[0].px)}, Tiefe ${fmt.usd(sideDepth(levels).notional)}), ${lack} fehlen noch. Ohne Gegenseite gibt es weder Mid noch Shortfall – sobald beide Seiten belegt sind, rechnet die Seite automatisch.`
+  }
+  return r.missing === 'spot'
+    ? 'Der Spot-Markt hat (noch) kein Orderbuch – z. B. vor dem Handelsstart. Sobald Orders im Buch liegen, rechnet die Seite automatisch.'
+    : 'Der Perp-Markt hat aktuell kein Orderbuch.'
+}
+
 export function renderDetail(el, r, settings, data) {
   const p = r.pair
   const width = Math.max(300, Math.min(712, (el.closest('.drawer-panel')?.clientWidth ?? 760) - 48 - 30))
@@ -168,7 +194,7 @@ export function renderDetail(el, r, settings, data) {
     title,
     h('div', { class: 'sub' }, `${KIND[p.kind]}${p.issuer ? ` · ${p.issuer}` : ''} · ${CATEGORY[p.category]} · ${DIRECTION[r.direction]}`),
     h('div', { class: 'badges', style: { 'margin-top': '8px' } },
-      h('span', { class: `status ${st.tone}` }, icon(st.icon), st.label)),
+      h('span', { class: `status ${st.tone}` }, icon(st.icon), statusLabel(r))),
     h('div', { class: 'detail-legs' },
       legCard(`Spot · ${p.spot.base.name}/${p.spot.quote}`, 'spot', [
         ['Markt', h('span', { class: 'mono' }, p.spot.coin)],
@@ -190,29 +216,28 @@ export function renderDetail(el, r, settings, data) {
   const blocks = [head]
 
   if (!r.trip) {
-    blocks.push(h('p', { class: 'card' }, r.status === 'loading'
-      ? 'Orderbücher werden geladen …'
-      : r.missing === 'spot'
-        ? 'Der Spot-Markt hat (noch) kein Orderbuch – z. B. vor dem Handelsstart. Sobald Orders im Buch liegen, rechnet die Seite automatisch.'
-        : 'Der Perp-Markt hat aktuell kein zweiseitiges Orderbuch.'))
+    blocks.push(h('p', { class: 'card' }, bookMessage(r, data)))
     blocks.push(fundingSection(r, history, width))
     blocks.push(section('Risiken & Hinweise', null, risks(r, settings, history)))
     return mount(el, h('div', { class: 'detail' }, blocks))
   }
 
   const { econ, trip, curve } = r
+  const capital = settings.notional * (1 + 1 / settings.leverage)
   blocks.push(h('div', { class: 'kpis' },
-    kpi(`Netto ${fmt.duration(settings.hours)}`, trip.complete ? fmt.usd(econ.netUsd, { sign: true }) : '–', trip.complete ? `${fmt.pct(econ.netApr, { sign: true })} p.a.` : 'Buch zu dünn', econ.netUsd >= 0 ? 'pos' : 'neg'),
-    kpi('Auf Kapital', trip.complete ? `${fmt.pct(econ.capitalApr, { sign: true })}` : '–', `p.a. · ${fmt.usd(econ.capital)} bei ${settings.leverage}×`),
-    kpi('Break-even', trip.complete ? fmt.duration(econ.breakEvenHours) : '–', `Funding ${fmt.pct(econ.fundingApr)} p.a.`),
-    kpi('Kosten Ein + Aus', `${fmt.bps(trip.costBps)} bps`, fmt.usd(trip.costUsd))))
+    econ
+      ? kpi(`Netto ${fmt.duration(settings.hours)}`, fmt.usd(econ.netUsd, { sign: true }), `${fmt.pct(econ.netApr, { sign: true })} p.a.`, econ.netUsd >= 0 ? 'pos' : 'neg')
+      : kpi(`Netto ${fmt.duration(settings.hours)}`, '–', 'Buch zu dünn'),
+    kpi('Auf Kapital', econ ? fmt.pct(econ.capitalApr, { sign: true }) : '–', `p.a. · ${fmt.usd(capital)} bei ${settings.leverage}×`),
+    kpi('Break-even', econ ? fmt.duration(econ.breakEvenHours) : '–', `Funding ${fmt.pct(r.fundingApr, { sign: true })} p.a.`),
+    kpi('Kosten Ein + Aus', econ ? `${fmt.bps(trip.costBps)} bps` : '–', econ ? fmt.usd(trip.costUsd) : 'unvollständig')))
 
   blocks.push(section('Woher der Ertrag kommt',
     `Funding ${FUNDING_SOURCE[r.rate.source]}${r.rate.fallback ? ' (Historie lädt noch)' : ''} über ${fmt.duration(settings.hours)} gegen die Kosten, ${fmt.usd(settings.notional)} je Leg ein- und wieder auszusteigen.${settings.basisMode === 'converge' && r.basis != null ? ' Basis-Szenario: Spot und Perp laufen bis zum Exit zusammen.' : ''}`,
-    trip.complete ? waterfall(r) : h('p', { class: 'card' }, 'Die sichtbare Tiefe reicht für diese Größe nicht – Netto nicht berechenbar.')))
+    econ ? waterfall(r) : h('p', { class: 'card' }, 'Die sichtbare Tiefe reicht für diese Größe nicht – Netto nicht berechenbar.')))
 
   blocks.push(section('Implementation Shortfall je Leg',
-    `Market-Order gegen das Mid zum Entscheidungszeitpunkt: halber Spread + Impact beim Abarbeiten der Levels + Taker-Gebühr, in bps der Positionsgröße. ${PLANS[r.direction].spotEntry === 'buy' ? 'Entry: Spot kaufen, Perp shorten. Exit: Spot verkaufen, Perp zurückkaufen.' : 'Entry: Spot verkaufen, Perp kaufen. Exit umgekehrt.'}`,
+    `Market-Order gegen den Preis zum Entscheidungszeitpunkt (Mid): halber Spread + Impact beim Abarbeiten der Levels + Taker-Gebühr, in bps der Positionsgröße. ${PLANS[r.direction].spotEntry === 'buy' ? 'Entry: Spot kaufen, Perp shorten. Exit: Spot verkaufen, Perp zurückkaufen.' : 'Entry: Spot verkaufen, Perp kaufen. Exit umgekehrt.'}`,
     legsTable(trip),
     !trip.complete ? h('p', { class: 'fine neg' }, `${LEG[trip.limiting]} kann die Größe nicht vollständig füllen – sichtbare Tiefe ${fmt.usd(curve.capacity)}.`) : null))
 

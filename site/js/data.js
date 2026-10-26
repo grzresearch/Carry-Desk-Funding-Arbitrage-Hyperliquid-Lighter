@@ -51,6 +51,7 @@ export class LiveData extends EventTarget {
     this.error = null
     this.busy = false
     this.pendingCoarse = new Set()
+    this.pairRefresh = null
     this.pendingHistory = new Map() // coin → priority of the request in flight
     this.notifyTimer = null
   }
@@ -70,7 +71,10 @@ export class LiveData extends EventTarget {
     this.notify()
     try {
       await this.refreshUniverse()
-      await this.refreshBooks(this.legCoins(), 3)
+      const coins = this.legCoins()
+      const failed = await this.refreshBooks(coins, 3)
+      // Old books must not pass for live ones: a mostly failed cycle is an error.
+      if (coins.length && failed > coins.length / 2) throw new Error(`l2Book: ${failed} von ${coins.length} Büchern fehlgeschlagen`)
       this.updatedAt = Date.now()
       this.error = null
     } catch (err) {
@@ -87,23 +91,30 @@ export class LiveData extends EventTarget {
     const full = !this.liveDexes || this.cycle % FULL_SCAN_EVERY === 0
     const [dexes, spot] = await Promise.all([this.client.perpDexs(), this.client.spotMetaAndAssetCtxs()])
     const names = ['', ...dexes.filter(Boolean).map((d) => d.name)].filter((n) => full || this.liveDexes.has(n))
+    const failed = new Set()
     const fetched = await Promise.all(
       names.map((dex) =>
         this.client
           .metaAndAssetCtxs(dex)
           .then(([meta, ctxs]) => ({ dex, meta, ctxs }))
-          .catch(() => null),
+          .catch(() => {
+            failed.add(dex)
+            return null
+          }),
       ),
     )
     let perps = fetched.filter(Boolean)
-    if (!full && this.lastPerps) {
-      // Keep dexes we skipped this cycle (nothing live there) from the last full scan.
+    if (this.lastPerps) {
+      // Keep dexes skipped this cycle (nothing live there) and dexes whose fetch failed
+      // from the last read; a full scan drops only dexes that really disappeared.
       const seen = new Set(perps.map((p) => p.dex))
-      perps = perps.concat(this.lastPerps.filter((p) => !seen.has(p.dex)))
+      perps = perps.concat(this.lastPerps.filter((p) => !seen.has(p.dex) && (!full || failed.has(p.dex))))
     }
     this.lastPerps = perps
     if (full) {
-      this.liveDexes = new Set(perps.filter((p) => p.meta.universe.some((a) => !a.isDelisted)).map((p) => p.dex))
+      // A dex that failed is unknown, not dead: keep polling it.
+      const live = perps.filter((p) => p.meta.universe.some((a) => !a.isDelisted)).map((p) => p.dex)
+      this.liveDexes = new Set([...live, ...failed])
     }
     this.universe = buildUniverse({ dexes, spot, perps })
     this.rematch()
@@ -129,10 +140,12 @@ export class LiveData extends EventTarget {
       this.client
         .tokenDetails(tokenId)
         .then((details) => {
-          if (!details?.deployer) return
-          this.deployers.set(tokenId, details.deployer)
+          if (!details || typeof details !== 'object') return // transient: retry next cycle
+          // Genesis tokens (HYPE, PURR) have no deployer; remember that too.
+          const deployer = details.deployer ?? null
+          this.deployers.set(tokenId, deployer)
           saveDeployers(this.deployers)
-          if (UNBACKED_DEPLOYERS.has(details.deployer)) {
+          if (UNBACKED_DEPLOYERS.has(deployer)) {
             this.rematch()
             this.notify()
           }
@@ -166,12 +179,15 @@ export class LiveData extends EventTarget {
     this.books.set(coin, deepBook(entry.precise ?? null, entry.coarse ?? null) ?? book)
   }
 
+  /** Refresh precise books (and the tails we rely on). Returns how many failed. */
   async refreshBooks(coins, priority = 3) {
+    let failed = 0
     await Promise.all(
       coins.map((coin) =>
         this.fetchBook(coin, { priority })
           .then(() => this.notify())
           .catch((err) => {
+            failed++
             console.warn('l2Book', coin, err.message)
             if (!this.books.has(coin)) this.books.set(coin, { bids: [], asks: [], time: null })
           }),
@@ -180,6 +196,7 @@ export class LiveData extends EventTarget {
     // Refresh tails we already rely on so they do not go stale.
     const tails = coins.filter((c) => this.raw.get(c)?.coarse)
     await Promise.all(tails.map((coin) => this.fetchBook(coin, { nSigFigs: COARSE_SIG_FIGS, priority: 4 }).catch(() => {})))
+    return failed
   }
 
   /** Visible depth on the thinner side of a coin's precise book. */
@@ -230,14 +247,19 @@ export class LiveData extends EventTarget {
 
   /** Keep the two legs of an open detail view fresh, including their tails. */
   async refreshPair(pair) {
+    // Never stack refreshes: if the last one is still queued, skip this tick.
+    if (this.pairRefresh) return this.pairRefresh
     const coins = [pair.spot.coin, pair.perp.coin]
-    await Promise.all(
+    this.pairRefresh = Promise.all(
       coins.flatMap((coin) => [
         this.fetchBook(coin, { priority: 1 }).catch(() => {}),
         this.fetchBook(coin, { nSigFigs: COARSE_SIG_FIGS, priority: 2 }).catch(() => {}),
       ]),
-    )
-    this.notify()
+    ).finally(() => {
+      this.pairRefresh = null
+      this.notify()
+    })
+    return this.pairRefresh
   }
 
   usage() {

@@ -17,7 +17,7 @@ export const KIND_SHORT = {
 }
 
 export const KIND_HELP = {
-  native: 'Spot-Token und Perp tragen denselben Ticker; Identität per Preisabgleich bestätigt.',
+  native: 'Spot-Token und Perp tragen denselben Ticker; die Preise stimmen überein (kein bekannter Emittent).',
   bridged: 'Gebridgter Token des Underlyings (z. B. Unit, LayerZero, Wagyu) – Peg- und Bridge-Risiko.',
   wrapped: 'Wrapper auf das Underlying – Emittenten- und Rücknahmerisiko.',
   'tokenized-equity': 'Tokenisierte Aktie eines Emittenten (EQX, xStocks …) gegen den Aktien-Perp.',
@@ -37,6 +37,14 @@ export const STATUS = {
   thin: { label: 'Zu wenig Tiefe', tone: 'warn', icon: 'warn' },
   nobook: { label: 'Kein Orderbuch', tone: 'idle', icon: 'dot' },
   loading: { label: 'Lade …', tone: 'idle', icon: 'clock' },
+  mismatch: { label: 'Preis passt nicht', tone: 'bad', icon: 'cross' },
+}
+
+/** Status text for a row; book states name the leg and whether it is one-sided. */
+export function statusLabel(r) {
+  if (r.status !== 'nobook') return STATUS[r.status].label
+  const leg = r.missing === 'spot' ? 'Spot' : 'Perp'
+  return r.oneSided ? `${leg}-Buch einseitig` : `${leg} ohne Orderbuch`
 }
 
 export const DIRECTION = {
