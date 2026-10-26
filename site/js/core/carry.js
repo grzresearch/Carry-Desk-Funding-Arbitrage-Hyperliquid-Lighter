@@ -20,7 +20,9 @@ export function basisBps(spotMid, perpMid, perpUnits = 1) {
 }
 
 /**
- * Hold a round trip `trip` for `hours` at `hourlyRate` funding.
+ * Hold a round trip `trip` for `hours` at `hourlyRate` funding. The rate is signed: the
+ * carry side earns it, the reverse side earns its negative — so a rate your own order
+ * has pushed past zero shows up as a loss.
  *
  * basisMode 'hold'     exit basis equals entry basis: no basis P&L (conservative)
  * basisMode 'converge' basis closes to zero by exit: the carry side pockets a perp
@@ -30,7 +32,7 @@ export function basisBps(spotMid, perpMid, perpUnits = 1) {
  */
 export function carryEconomics({ trip, hourlyRate, hours, basis = 0, basisMode = 'hold', leverage = 1 }) {
   const { notional, costUsd, direction } = trip
-  const rate = Math.abs(hourlyRate)
+  const rate = direction === 'carry' ? hourlyRate : -hourlyRate
   const fundingUsd = notional * rate * hours
   const captured = basisMode === 'converge' && basis != null ? (direction === 'carry' ? basis : -basis) : 0
   const basisUsd = (notional * captured) / 1e4
@@ -70,14 +72,16 @@ export function logGrid(lo, hi, steps) {
  * horizon is concave in size. Trace it across the visible depth and report the size
  * that earns the most and the largest size that still earns anything.
  */
-export function sizeCurve({ spotBook, perpBook, direction, hourlyRate, hours, spotFeeBps, perpFeeBps, spotRef, perpRef, basis, basisMode, leverage, minNotional = 50, steps = 56 }) {
+export function sizeCurve({ spotBook, perpBook, direction, hourlyRate, rateAt, hours, spotFeeBps, perpFeeBps, spotRef, perpRef, basis, basisMode, leverage, minNotional = 50, steps = 56 }) {
   const cap = capacity({ spotBook, perpBook, direction })
   if (!(cap > minNotional)) return { capacity: cap, points: [], best: null, maxProfitable: null, depthLimited: false }
+  // `rateAt(trip)` lets funding depend on size (your own order moves the premium).
   const netAt = (notional) => {
     const trip = roundTrip({ spotBook, perpBook, notional, direction, spotFeeBps, perpFeeBps, spotRef, perpRef })
     if (!trip?.complete) return null
-    const econ = carryEconomics({ trip, hourlyRate, hours, basis, basisMode, leverage })
-    return { notional, netUsd: econ.netUsd, costBps: trip.costBps, netApr: econ.netApr }
+    const rate = rateAt ? rateAt(trip) : hourlyRate
+    const econ = carryEconomics({ trip, hourlyRate: rate, hours, basis, basisMode, leverage })
+    return { notional, netUsd: econ.netUsd, costBps: trip.costBps, netApr: econ.netApr, fundingApr: econ.fundingApr }
   }
   const points = []
   for (const notional of logGrid(minNotional, cap, steps)) {

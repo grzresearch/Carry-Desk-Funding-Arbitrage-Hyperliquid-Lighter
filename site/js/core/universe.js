@@ -62,6 +62,8 @@ export function buildUniverse({ dexes = [], spot, perps = [] }) {
       deployer: d.deployer,
       oiCaps: new Map((d.assetToStreamingOiCap ?? []).map(([coin, cap]) => [coin, num(cap)])),
       fundingMultipliers: new Map((d.assetToFundingMultiplier ?? []).map(([coin, m]) => [coin, num(m)])),
+      fundingInterest: new Map((d.assetToFundingInterestRate ?? []).map(([coin, r]) => [coin, num(r)])),
+      fundingClamps: new Map((d.assetToFundingClamp ?? []).map(([coin, c]) => [coin, num(c)])),
     })
   }
 
@@ -91,6 +93,10 @@ export function buildUniverse({ dexes = [], spot, perps = [] }) {
         openInterest,
         openInterestUsd: oracle ? openInterest * oracle : null,
         oiCap: dexInfo.get(dex)?.oiCaps.get(asset.name) ?? null,
+        // HIP-3 funding = m · (P + clamp(I − P, ±c)) / 8 with per-asset m, I, c (core/funding.js)
+        fundingMultiplier: dexInfo.get(dex)?.fundingMultipliers.get(asset.name) ?? null,
+        fundingInterest: dexInfo.get(dex)?.fundingInterest.get(asset.name) ?? null,
+        fundingClamp: dexInfo.get(dex)?.fundingClamps.get(asset.name) ?? null,
         maxLeverage: asset.maxLeverage,
         onlyIsolated: Boolean(asset.onlyIsolated) || asset.marginMode === 'strictIsolated' || asset.marginMode === 'noCross',
         feeScale: num(asset.deployerFeeScale),

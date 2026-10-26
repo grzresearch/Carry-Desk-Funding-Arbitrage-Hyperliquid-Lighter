@@ -165,6 +165,20 @@ function fundingSection(r, history, width) {
       fundingChart({ history, average: avg7, width })))
 }
 
+const growth = (settings) =>
+  settings.fundingImpact === 'off'
+    ? 'Funding wächst linear mit der Größe, der Shortfall überproportional'
+    : 'Funding wächst mit der Größe – abzüglich dessen, was dein Perp-Order an Premium wegnimmt –, der Shortfall überproportional'
+
+/** One sentence on how your own order changes the funding you earn. */
+function impactNote(r, settings) {
+  if (settings.fundingImpact === 'off' || !r.atSize) return ''
+  const base = r.direction === 'carry' ? r.fundingApr : -r.fundingApr
+  const at = r.atSize.apr
+  if (Math.abs(at - base) < 0.0005) return ' Dein Perp-Order verändert das Funding bei dieser Größe nicht – es liegt im Clamp-Band am Zins-Basiswert oder das Buch ist tief genug.'
+  return ` Dein Perp-${r.direction === 'carry' ? 'Short' : 'Long'} verschiebt die Premium, aus der Hyperliquid das Funding berechnet: statt ${fmt.pct(base, { sign: true })} rechnen wir mit ${fmt.pct(at, { sign: true })} p.a.`
+}
+
 /** What the missing or one-sided book looks like, so a listing can be followed live. */
 function bookMessage(r, data) {
   const p = r.pair
@@ -208,6 +222,9 @@ export function renderDetail(el, r, settings, data) {
         ['Dex', `${dexLabel(p.perp)}${p.perp.growthMode === 'enabled' ? ' · Growth Mode' : ''}`],
         ['Mid / Oracle', `${fmt.price(r.perpMid)} / ${fmt.price(p.perp.oracle)}`],
         ['Funding jetzt', `${fmt.rate(p.perp.funding)} /h · ${fmt.pct(p.perp.funding * 8760, { sign: true })} p.a.`],
+        ...(r.atSize && settings.fundingImpact !== 'off'
+          ? [['Funding bei deiner Größe', `${fmt.pct(r.atSize.apr, { sign: true })} p.a. (${FUNDING_SOURCE[r.rate.source]}, nach Eigeneinfluss)`]]
+          : []),
         ['Open Interest', `${fmt.usd(p.perp.openInterestUsd)}${p.perp.oiCap ? ` von ${fmt.usd(p.perp.oiCap)}` : ''}`],
         ['Max. Hebel · Margin', `${p.perp.maxLeverage}× · ${p.perp.onlyIsolated ? 'isoliert' : 'cross'} · ${p.perp.collateral}`],
         ['Taker-Gebühr', `${fmt.bps(r.fees.perp, { digits: 2 })} bps`],
@@ -229,11 +246,11 @@ export function renderDetail(el, r, settings, data) {
       ? kpi(`Netto ${fmt.duration(settings.hours)}`, fmt.usd(econ.netUsd, { sign: true }), `${fmt.pct(econ.netApr, { sign: true })} p.a.`, econ.netUsd >= 0 ? 'pos' : 'neg')
       : kpi(`Netto ${fmt.duration(settings.hours)}`, '–', 'Buch zu dünn'),
     kpi('Auf Kapital', econ ? fmt.pct(econ.capitalApr, { sign: true }) : '–', `p.a. · ${fmt.usd(capital)} bei ${settings.leverage}×`),
-    kpi('Break-even', econ ? fmt.duration(econ.breakEvenHours) : '–', `Funding ${fmt.pct(r.fundingApr, { sign: true })} p.a.`),
+    kpi('Break-even', econ ? fmt.duration(econ.breakEvenHours) : '–', `Funding ${fmt.pct(econ ? econ.fundingApr : r.fundingApr, { sign: true })} p.a.${econ && settings.fundingImpact !== 'off' ? ' bei deiner Größe' : ''}`),
     kpi('Kosten Ein + Aus', econ ? `${fmt.bps(trip.costBps)} bps` : '–', econ ? fmt.usd(trip.costUsd) : 'unvollständig')))
 
   blocks.push(section('Woher der Ertrag kommt',
-    `Funding ${FUNDING_SOURCE[r.rate.source]}${r.rate.fallback ? ' (Historie lädt noch)' : ''} über ${fmt.duration(settings.hours)} gegen die Kosten, ${fmt.usd(settings.notional)} je Leg ein- und wieder auszusteigen.${settings.basisMode === 'converge' && r.basis != null ? ' Basis-Szenario: Spot und Perp laufen bis zum Exit zusammen.' : ''}`,
+    `Funding ${FUNDING_SOURCE[r.rate.source]}${r.rate.fallback ? ' (Historie lädt noch)' : ''} über ${fmt.duration(settings.hours)} gegen die Kosten, ${fmt.usd(settings.notional)} je Leg ein- und wieder auszusteigen.${impactNote(r, settings)}${settings.basisMode === 'converge' && r.basis != null ? ' Basis-Szenario: Spot und Perp laufen bis zum Exit zusammen.' : ''}`,
     econ ? waterfall(r) : h('p', { class: 'card' }, 'Die sichtbare Tiefe reicht für diese Größe nicht – Netto nicht berechenbar.')))
 
   blocks.push(section('Implementation Shortfall je Leg',
@@ -245,9 +262,9 @@ export function renderDetail(el, r, settings, data) {
     const crossover = curve.maxProfitable
     blocks.push(section('Lohnt sich die Größe?',
       curve.best && curve.depthLimited
-        ? `Funding wächst linear mit der Größe, der Shortfall überproportional – hier steigt der Ertrag aber bis zum Ende der sichtbaren Tiefe (${fmt.usd(curve.capacity)}): ${fmt.usd(curve.best.netUsd, { sign: true })} über ${fmt.duration(settings.hours)}. Das echte Optimum liegt darüber.`
+        ? `${growth(settings)} – hier steigt der Ertrag aber bis zum Ende der sichtbaren Tiefe (${fmt.usd(curve.capacity)}): ${fmt.usd(curve.best.netUsd, { sign: true })} über ${fmt.duration(settings.hours)}. Das echte Optimum liegt darüber.`
         : curve.best
-        ? `Funding wächst linear mit der Größe, der Shortfall überproportional. Am meisten bringen ${fmt.usd(curve.best.notional)} je Leg (${fmt.usd(curve.best.netUsd, { sign: true })} über ${fmt.duration(settings.hours)}); bis ${fmt.usd(crossover.notional)} bleibt die Position im Plus.`
+        ? `${growth(settings)}. Am meisten bringen ${fmt.usd(curve.best.notional)} je Leg (${fmt.usd(curve.best.netUsd, { sign: true })} über ${fmt.duration(settings.hours)}); bis ${fmt.usd(crossover.notional)} bleibt die Position im Plus.`
         : `Bei keiner Größe deckt das Funding über ${fmt.duration(settings.hours)} die Kosten für Ein- und Ausstieg – eine längere Haltedauer oder ein günstigeres Gebühren-Tier ändert das eventuell.`,
       h('div', { class: 'card' }, sizeCurveChart({ points: curve.points, notional: settings.notional, best: curve.best, maxProfitable: curve.maxProfitable, width }), sizeTable(curve.points))))
   }
@@ -275,7 +292,7 @@ export function renderDetail(el, r, settings, data) {
   blocks.push(fundingSection(r, history, width))
   blocks.push(section('Risiken & Hinweise', null, risks(r, settings, history)))
   blocks.push(h('p', { class: 'fine' },
-    `Annahmen: Taker-Orders auf beiden Legs, Exit gegen ein Buch wie das heutige, Funding ${FUNDING_SOURCE[r.rate.source]} konstant über ${fmt.duration(settings.hours)}, Basis ${settings.basisMode === 'converge' ? 'konvergiert bis zum Exit' : 'bleibt unverändert'}. Bücher über die 20 sichtbaren Levels hinaus werden konservativ aus aggregierten Leveln ergänzt.`))
+    `Annahmen: Taker-Orders auf beiden Legs, Exit gegen ein Buch wie das heutige, Funding ${FUNDING_SOURCE[r.rate.source]} konstant über ${fmt.duration(settings.hours)}${settings.fundingImpact === 'off' ? ' (ohne eigenen Einfluss)' : settings.fundingImpact === 'max' ? ', abzüglich dessen, was dein Perp-Order an Premium wegnimmt (Obergrenze: die verbrauchte Liquidität kommt nie zurück)' : ', abzüglich dessen, was dein Perp-Order an Premium wegnimmt (gewichtet mit deiner Größe relativ zum Stunden-Volumen des Perps)'}, Basis ${settings.basisMode === 'converge' ? 'konvergiert bis zum Exit' : 'bleibt unverändert'}. Bücher über die 20 sichtbaren Levels hinaus werden konservativ aus aggregierten Leveln ergänzt.`))
 
   return mount(el, h('div', { class: 'detail' }, blocks))
 }

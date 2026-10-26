@@ -50,13 +50,23 @@ Break-even = Kosten / (N · |r|)
 Kapital  = N · (1 + 1/Hebel)
 ```
 
-**Optimale Größe.** Das Funding wächst linear mit *N*, der Shortfall überproportional. Die Seite rechnet die Netto-Kurve über die gesamte sichtbare Tiefe und zeigt die Größe mit dem höchsten Ertrag sowie die größte Größe, die noch im Plus ist.
+**Funding bei deiner Größe.** Hyperliquid rechnet `Funding = m · (P + clamp(I − P, ±c)) / 8`. P ist der Premium-Index aus den Impact-Preisen des Perp-Buchs ($6k Notional, $20k bei BTC/ETH). Auf HIP-3 ist P der Mittelwert beider Impact-Preise; auf dem Main-Dex zählen nur Impact-Preise jenseits des Oracles. Die Seite rekonstruiert P aus dem Buch; das stimmt live exakt mit `ctx.premium` überein. Danach nimmt sie die Liquidität heraus, die dein eigener Perp-Order verbraucht, und rechnet das Funding neu. Drei Folgen daraus:
+- Solange P im Clamp-Band bleibt, ändert sich nichts. Funding auf dem Zins-Basiswert (10,95 % p.a. auf dem Main-Dex) kann dein Short nicht drücken.
+- Auf dem Main-Dex kann ein Short das Funding höchstens bis auf diesen Basiswert drücken.
+- Wie lange der Effekt anhält, ist einstellbar:
+  - **realistisch** (Standard): der Effekt zählt im Verhältnis deiner Größe zum Stunden-Volumen des Perps. Ein Markt, der stündlich ein Vielfaches deiner Order handelt, füllt das Buch längst wieder auf.
+  - **konservativ**: die verbrauchte Liquidität kommt nie zurück (Obergrenze).
+  - **ignorieren**: der eigene Einfluss bleibt unberücksichtigt.
+
+Die Größen-Kurve und damit die optimale Größe rechnen mit dem Funding, das bei der jeweiligen Größe gilt.
+
+**Optimale Größe.** Das Funding wächst höchstens linear mit *N*, der Shortfall überproportional. Die Seite rechnet die Netto-Kurve über die gesamte sichtbare Tiefe und zeigt die Größe mit dem höchsten Ertrag sowie die größte Größe, die noch im Plus ist.
 
 **Gebühren** folgen der [offiziellen Formel](https://hyperliquid.gitbook.io/hyperliquid-docs/trading/fees): Volumen-Tier und Staking-Rabatt sind wählbar. Je Markt kommen der HIP-3-Deployer-Fee-Scale (×2 bei Scale 1), Growth Mode (−90 %), Aligned Quote Assets (USDH: −20 % auf den Protokollanteil) und Stable Pairs (−80 %) hinzu.
 
 ## Bedienung
 
-- **Positionsgröße, Haltedauer, Funding-Annahme, Basis-Szenario, Fee-Tier und Hebel** wirken auf alle Zeilen.
+- **Positionsgröße, Haltedauer, Funding-Annahme, Basis-Szenario, eigener Funding-Einfluss, Fee-Tier und Hebel** wirken auf alle Zeilen.
 - Ein Klick auf eine Zeile öffnet die Detailansicht mit
   - der Ertragsaufstellung (Funding, Spread, Impact und Gebühren bis zum Netto),
   - der Shortfall-Tabelle je Leg,
@@ -84,7 +94,7 @@ Die Detailansicht listet die zutreffenden Punkte je Paar auf. Keine Anlageberatu
 Keine Abhängigkeiten. Node ≥ 20 reicht für die Tests.
 
 ```bash
-npm test          # node --test, 74 Tests: Buch-Walk, Shortfall, Carry, Fees, Matching (gegen echten API-Snapshot), Rate-Limiter
+npm test          # node --test, 85 Tests: Buch-Walk, Shortfall, Carry, Funding-Formel, Fees, Matching (gegen echten API-Snapshot), Rate-Limiter
 npm run serve     # http://localhost:8080
 node scripts/snapshot.mjs > tests/fixtures/universe.json   # Test-Fixture aktualisieren
 ```
@@ -100,6 +110,7 @@ site/
     book.js       L2-Bücher, Walk, Stitching der aggregierten Tiefe
     shortfall.js  Implementation Shortfall je Leg und Round Trip
     carry.js      Funding-Ökonomie, Break-even, Größen-Kurve
+    funding.js    Funding-Formel, Premium aus dem Buch, Einfluss der eigenen Order
     fees.js       Taker-Gebühren nach offizieller Formel
     evaluate.js   Paar + Bücher + Annahmen → eine Ergebniszeile
   js/data.js    Live-Daten: Refresh-Zyklus, Bücher, Funding-Historie
