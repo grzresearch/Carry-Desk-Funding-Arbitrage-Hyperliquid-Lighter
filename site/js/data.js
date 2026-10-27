@@ -1,80 +1,100 @@
-// Live market data, kept fresh within Hyperliquid's per-IP weight budget.
+// Live market data for one venue, kept fresh within that venue's rate limit.
 //
-// One refresh cycle costs roughly: perpDexs + spot meta (40) + one metaAndAssetCtxs per
-// live perp dex (20 each) + one l2Book per leg (2 each). Coarse books (for depth past the
-// 20 visible levels) and funding history are fetched on demand with lower priority.
+// A cycle reloads the venue's universe (markets, funding, prices) and the books the
+// active view needs (`want()`); deeper books, funding history and candles are fetched
+// on demand with lower priority. Everything is keyed by `market.key`
+// ("hl/BTC", "lt/1"), so venues never collide.
 
-import { createClient } from './core/api.js'
-import { WeightLimiter } from './core/ratelimit.js'
-import { parseBook, deepBook, sideDepth } from './core/book.js'
-import { buildUniverse } from './core/universe.js'
-import { matchPairs, UNBACKED_DEPLOYERS } from './core/matching.js'
+import { deepBook, sideDepth } from './core/book.js'
+import { CANDLE_HOURS } from './core/execution.js'
 
 const HOUR = 3_600_000
-const COARSE_SIG_FIGS = 3
-const FULL_SCAN_EVERY = 10 // cycles; also re-reads dexes without live markets
-const DEPLOYER_CACHE = 'carry-desk-deployers'
+const HISTORY_TTL = 30 * 60_000
+const CANDLES_TTL = 30 * 60_000
 
-/** Token deployers never change, so they are cached across visits (if storage works). */
-function loadDeployers() {
-  try {
-    return new Map(Object.entries(JSON.parse(localStorage.getItem(DEPLOYER_CACHE) ?? '{}')))
-  } catch {
-    return new Map()
-  }
-}
-
-function saveDeployers(map) {
-  try {
-    localStorage.setItem(DEPLOYER_CACHE, JSON.stringify(Object.fromEntries(map)))
-  } catch {
-    // Private mode or blocked storage: the lookup simply repeats next visit.
-  }
-}
-
-export class LiveData extends EventTarget {
-  constructor({ client = createClient({ limiter: new WeightLimiter({ budget: 1000 }) }) } = {}) {
+export class VenueData extends EventTarget {
+  constructor(adapter) {
     super()
-    this.client = client
+    this.adapter = adapter
+    this.id = adapter.id
     this.universe = null
-    this.pairs = []
-    this.unbacked = [] // spot tokens excluded as unbacked mirrors
-    this.deployers = loadDeployers() // tokenId → deployer address
-    this.pendingDeployers = new Set()
-    this.books = new Map() // coin → stitched book
-    this.raw = new Map() // coin → { precise, coarse, preciseAt, coarseAt }
-    this.history = new Map() // perp coin → [{ time, rate, premium }]
+    this.markets = new Map() // key → market
+    this.books = new Map() // key → stitched book
+    this.raw = new Map() // key → { precise, coarse }
+    this.history = new Map() // perp key → [{ time, rate, premium }]
     this.historyAt = new Map()
-    this.liveDexes = null
-    this.cycle = 0
+    this.candles = new Map() // key → [{ time, close, high, low, notional }]
+    this.candlesAt = new Map()
+    this.wanted = new Set()
     this.updatedAt = null
     this.error = null
     this.busy = false
-    this.pendingCoarse = new Set()
-    this.pairRefresh = null
-    this.pendingHistory = new Map() // coin → priority of the request in flight
+    this.pending = { coarse: new Set(), history: new Map(), candles: new Map() } // key → priority queued
+    this.inflight = new Map() // `${key}|precise` / `${key}|coarse` → book request
+    this.marketRefresh = null
     this.notifyTimer = null
+    // A streaming venue pushes: pick up whatever books just arrived.
+    adapter.onChange = () => {
+      if (this.streaming) this.syncBooks(this.wanted)
+      this.notify()
+    }
+  }
+
+  /** Venues that stream their books (Lighter) are read, not polled. */
+  get streaming() {
+    return typeof this.adapter.peekBook === 'function'
+  }
+
+  /** Copy the live books of streaming markets; a book still on its way stays loading. */
+  syncBooks(keys) {
+    for (const key of keys) {
+      const market = this.markets.get(key)
+      const book = market && this.adapter.peekBook(market)
+      if (book) this.books.set(key, book)
+    }
+  }
+
+  get pairs() {
+    return this.universe?.pairs ?? []
+  }
+
+  get unbacked() {
+    return this.universe?.unbacked ?? []
   }
 
   notify() {
     if (this.notifyTimer) return
+    // Streamed snapshots land a few a second: batch them into fewer renders.
     this.notifyTimer = setTimeout(() => {
       this.notifyTimer = null
       this.dispatchEvent(new Event('change'))
-    }, 120)
+    }, this.streaming ? 400 : 120)
   }
 
-  /** Market metadata + contexts for every dex, then books for every matched leg. */
+  /**
+   * Markets whose books the active view needs on every cycle. Books never fetched are
+   * loaded right away (a new tab, a market that just listed), not a cycle later.
+   */
+  want(keys) {
+    this.wanted = new Set(keys)
+    // Streaming venues subscribe to exactly these (and may drop the rest).
+    this.adapter.watch?.(keys.map((k) => this.markets.get(k)).filter(Boolean))
+    if (this.streaming) return this.syncBooks(keys)
+    const missing = keys.filter((k) => this.markets.has(k) && !this.books.has(k) && !this.inflight.has(`${k}|precise`))
+    if (missing.length) this.refreshBooks(missing).then(() => this.notify())
+  }
+
   async refresh() {
     if (this.busy) return
     this.busy = true
     this.notify()
     try {
       await this.refreshUniverse()
-      const coins = this.legCoins()
-      const failed = await this.refreshBooks(coins, 3)
+      const keys = [...this.wanted].filter((k) => this.markets.has(k))
+      if (this.streaming) this.syncBooks(keys)
+      const failed = this.streaming ? 0 : await this.refreshBooks(keys, 3)
       // Old books must not pass for live ones: a mostly failed cycle is an error.
-      if (coins.length && failed > coins.length / 2) throw new Error(`l2Book: ${failed} von ${coins.length} Büchern fehlgeschlagen`)
+      if (keys.length && failed > keys.length / 2) throw new Error(`${this.adapter.name}: ${failed} von ${keys.length} Büchern fehlgeschlagen`)
       this.updatedAt = Date.now()
       this.error = null
     } catch (err) {
@@ -82,187 +102,153 @@ export class LiveData extends EventTarget {
       console.error(err)
     } finally {
       this.busy = false
-      this.cycle++
       this.notify()
     }
   }
 
   async refreshUniverse() {
-    const full = !this.liveDexes || this.cycle % FULL_SCAN_EVERY === 0
-    const [dexes, spot] = await Promise.all([this.client.perpDexs(), this.client.spotMetaAndAssetCtxs()])
-    const names = ['', ...dexes.filter(Boolean).map((d) => d.name)].filter((n) => full || this.liveDexes.has(n))
-    const failed = new Set()
-    const fetched = await Promise.all(
-      names.map((dex) =>
-        this.client
-          .metaAndAssetCtxs(dex)
-          .then(([meta, ctxs]) => ({ dex, meta, ctxs }))
-          .catch(() => {
-            failed.add(dex)
-            return null
-          }),
-      ),
-    )
-    let perps = fetched.filter(Boolean)
-    if (this.lastPerps) {
-      // Keep dexes skipped this cycle (nothing live there) and dexes whose fetch failed
-      // from the last read; a full scan drops only dexes that really disappeared.
-      const seen = new Set(perps.map((p) => p.dex))
-      perps = perps.concat(this.lastPerps.filter((p) => !seen.has(p.dex) && (!full || failed.has(p.dex))))
-    }
-    this.lastPerps = perps
-    if (full) {
-      // A dex that failed is unknown, not dead: keep polling it.
-      const live = perps.filter((p) => p.meta.universe.some((a) => !a.isDelisted)).map((p) => p.dex)
-      this.liveDexes = new Set([...live, ...failed])
-    }
-    this.universe = buildUniverse({ dexes, spot, perps })
-    this.rematch()
-    this.checkDeployers()
+    this.universe = await this.adapter.loadUniverse()
+    this.markets = new Map([...this.universe.spot, ...this.universe.perps].map((m) => [m.key, m]))
   }
 
-  rematch() {
-    const { pairs, unbacked } = matchPairs(this.universe, { deployers: this.deployers })
-    this.pairs = pairs
-    this.unbacked = unbacked
-  }
-
-  /**
-   * Matches without an issuer convention rest on ticker and price. Look up who deployed
-   * those tokens once, and drop any that come from a known unbacked-mirror deployer.
-   */
-  checkDeployers() {
-    const tokens = new Map()
-    for (const p of this.pairs) if (p.evidence !== 'strong') tokens.set(p.spot.base.tokenId, p.spot.base)
-    for (const [tokenId] of tokens) {
-      if (!tokenId || this.deployers.has(tokenId) || this.pendingDeployers.has(tokenId)) continue
-      this.pendingDeployers.add(tokenId)
-      this.client
-        .tokenDetails(tokenId)
-        .then((details) => {
-          if (!details || typeof details !== 'object') return // transient: retry next cycle
-          // Genesis tokens (HYPE, PURR) have no deployer; remember that too.
-          const deployer = details.deployer ?? null
-          this.deployers.set(tokenId, deployer)
-          saveDeployers(this.deployers)
-          if (UNBACKED_DEPLOYERS.has(deployer)) {
-            this.rematch()
-            this.notify()
-          }
-        })
-        .catch((err) => console.warn('tokenDetails', tokenId, err.message))
-        .finally(() => this.pendingDeployers.delete(tokenId))
-    }
-  }
-
-  legCoins() {
-    const coins = new Set()
-    for (const p of this.pairs) {
-      coins.add(p.spot.coin)
-      coins.add(p.perp.coin)
-    }
-    return [...coins]
-  }
-
-  async fetchBook(coin, { nSigFigs = null, priority = 3 } = {}) {
-    const raw = await this.client.l2Book(coin, { nSigFigs, priority })
-    const book = parseBook(raw)
-    const entry = this.raw.get(coin) ?? {}
-    if (nSigFigs) {
-      entry.coarse = book
-      entry.coarseAt = Date.now()
-    } else {
-      entry.precise = book
-      entry.preciseAt = Date.now()
-    }
-    this.raw.set(coin, entry)
-    this.books.set(coin, deepBook(entry.precise ?? null, entry.coarse ?? null) ?? book)
+  /** Fetch one book; a request already in flight for it is shared, not repeated. */
+  fetchBook(key, { coarse = false, priority = 3 } = {}) {
+    const id = `${key}|${coarse ? 'coarse' : 'precise'}`
+    if (this.inflight.has(id)) return this.inflight.get(id)
+    const market = this.markets.get(key)
+    if (!market) return Promise.resolve()
+    const job = this.adapter
+      .fetchBook(market, { coarse, priority })
+      .then((book) => {
+        const entry = this.raw.get(key) ?? {}
+        entry[coarse ? 'coarse' : 'precise'] = book
+        this.raw.set(key, entry)
+        this.books.set(key, deepBook(entry.precise ?? null, entry.coarse ?? null) ?? book)
+      })
+      .finally(() => this.inflight.delete(id))
+    this.inflight.set(id, job)
+    return job
   }
 
   /** Refresh precise books (and the tails we rely on). Returns how many failed. */
-  async refreshBooks(coins, priority = 3) {
+  async refreshBooks(keys, priority = 3) {
     let failed = 0
     await Promise.all(
-      coins.map((coin) =>
-        this.fetchBook(coin, { priority })
+      keys.map((key) =>
+        this.fetchBook(key, { priority })
           .then(() => this.notify())
           .catch((err) => {
             failed++
-            console.warn('l2Book', coin, err.message)
-            if (!this.books.has(coin)) this.books.set(coin, { bids: [], asks: [], time: null })
+            console.warn(this.id, 'book', key, err.message)
+            if (!this.books.has(key)) this.books.set(key, { bids: [], asks: [], time: null })
           }),
       ),
     )
-    // Refresh tails we already rely on so they do not go stale.
-    const tails = coins.filter((c) => this.raw.get(c)?.coarse)
-    await Promise.all(tails.map((coin) => this.fetchBook(coin, { nSigFigs: COARSE_SIG_FIGS, priority: 4 }).catch(() => {})))
+    if (this.adapter.supportsCoarse) {
+      const tails = keys.filter((k) => this.raw.get(k)?.coarse)
+      await Promise.all(tails.map((key) => this.fetchBook(key, { coarse: true, priority: 4 }).catch(() => {})))
+    }
     return failed
   }
 
-  /** Visible depth on the thinner side of a coin's precise book. */
-  preciseDepth(coin) {
-    const p = this.raw.get(coin)?.precise
+  /** Visible depth on the thinner side of a market's precise book. */
+  preciseDepth(key) {
+    const p = this.raw.get(key)?.precise
     if (!p) return 0
     return Math.min(sideDepth(p.bids).notional, sideDepth(p.asks).notional)
   }
 
-  /** Ask for the coarse tail of books whose 20 visible levels cannot hold `notional`. */
-  wantDepth(coins, notional) {
-    for (const coin of coins) {
-      const entry = this.raw.get(coin)
-      if (!entry?.precise || entry.coarse || this.pendingCoarse.has(coin)) continue
-      if (this.preciseDepth(coin) >= notional * 1.2) continue
-      this.pendingCoarse.add(coin)
-      this.fetchBook(coin, { nSigFigs: COARSE_SIG_FIGS, priority: 4 })
+  /** Ask for the coarse tail of books whose visible levels cannot hold `notional`. */
+  wantDepth(keys, notional) {
+    if (!this.adapter.supportsCoarse) return
+    for (const key of keys) {
+      const entry = this.raw.get(key)
+      if (!entry?.precise || entry.coarse || this.pending.coarse.has(key)) continue
+      if (this.preciseDepth(key) >= notional * 1.2) continue
+      this.pending.coarse.add(key)
+      this.fetchBook(key, { coarse: true, priority: 4 })
         .then(() => this.notify())
         .catch(() => {})
-        .finally(() => this.pendingCoarse.delete(coin))
+        .finally(() => this.pending.coarse.delete(key))
     }
   }
 
   /** Funding history (7 days, hourly) for perps, most important first. */
-  wantHistory(perpCoins, priority = 8) {
-    for (const coin of perpCoins) {
-      const at = this.historyAt.get(coin)
-      if (at && Date.now() - at < 30 * 60_000) continue
+  wantHistory(keys, priority = 8) {
+    for (const key of keys) {
+      const perp = this.markets.get(key)
+      if (!perp || perp.kind !== 'perp') continue
+      const at = this.historyAt.get(key)
+      if (at && Date.now() - at < HISTORY_TTL) continue
       // A request already queued at the same or a more urgent priority will do.
-      if (this.pendingHistory.has(coin) && this.pendingHistory.get(coin) <= priority) continue
-      this.pendingHistory.set(coin, priority)
-      this.client
-        .fundingHistory(coin, Date.now() - 7 * 24 * HOUR, { priority })
+      const queued = this.pending.history.get(key)
+      if (queued != null && queued <= priority) continue
+      this.pending.history.set(key, priority)
+      this.adapter
+        .fetchFundingHistory(perp, Date.now() - 7 * 24 * HOUR, { priority })
         .then((rows) => {
-          this.history.set(
-            coin,
-            rows.map((r) => ({ time: r.time, rate: Number(r.fundingRate), premium: Number(r.premium) })).sort((a, b) => a.time - b.time),
-          )
-          this.historyAt.set(coin, Date.now())
+          this.history.set(key, rows)
+          this.historyAt.set(key, Date.now())
           this.notify()
         })
-        .catch((err) => console.warn('fundingHistory', coin, err.message))
+        .catch((err) => console.warn(this.id, 'fundingHistory', key, err.message))
         .finally(() => {
-          if (this.pendingHistory.get(coin) === priority) this.pendingHistory.delete(coin)
+          if (this.pending.history.get(key) === priority) this.pending.history.delete(key)
         })
     }
   }
 
-  /** Keep the two legs of an open detail view fresh, including their tails. */
-  async refreshPair(pair) {
+  /** Recent 1-minute candles: the maker model's flow and volatility inputs. */
+  wantCandles(keys, priority = 9) {
+    for (const key of keys) {
+      const market = this.markets.get(key)
+      if (!market) continue
+      const at = this.candlesAt.get(key)
+      if (at && Date.now() - at < CANDLES_TTL) continue
+      // A request already queued at the same or a more urgent priority will do.
+      const queued = this.pending.candles.get(key)
+      if (queued != null && queued <= priority) continue
+      this.pending.candles.set(key, priority)
+      this.adapter
+        .fetchCandles(market, Date.now() - CANDLE_HOURS * HOUR, { priority })
+        .then((rows) => {
+          this.candles.set(key, rows)
+          this.candlesAt.set(key, Date.now())
+          this.notify()
+        })
+        .catch((err) => console.warn(this.id, 'candles', key, err.message))
+        .finally(() => {
+          if (this.pending.candles.get(key) === priority) this.pending.candles.delete(key)
+        })
+    }
+  }
+
+  /** Stream these markets live, if the venue can (the legs of an open detail view). */
+  follow(keys) {
+    this.adapter.follow?.(keys.map((k) => this.markets.get(k)).filter(Boolean))
+  }
+
+  /** Keep the legs of an open detail view fresh, including their tails. */
+  async refreshMarkets(keys) {
+    if (this.streaming) {
+      this.syncBooks(keys)
+      return this.notify()
+    }
     // Never stack refreshes: if the last one is still queued, skip this tick.
-    if (this.pairRefresh) return this.pairRefresh
-    const coins = [pair.spot.coin, pair.perp.coin]
-    this.pairRefresh = Promise.all(
-      coins.flatMap((coin) => [
-        this.fetchBook(coin, { priority: 1 }).catch(() => {}),
-        this.fetchBook(coin, { nSigFigs: COARSE_SIG_FIGS, priority: 2 }).catch(() => {}),
+    if (this.marketRefresh) return this.marketRefresh
+    this.marketRefresh = Promise.all(
+      keys.flatMap((key) => [
+        this.fetchBook(key, { priority: 1 }).catch(() => {}),
+        this.adapter.supportsCoarse ? this.fetchBook(key, { coarse: true, priority: 2 }).catch(() => {}) : null,
       ]),
     ).finally(() => {
-      this.pairRefresh = null
+      this.marketRefresh = null
       this.notify()
     })
-    return this.pairRefresh
+    return this.marketRefresh
   }
 
   usage() {
-    return this.client.limiter.usage()
+    return this.adapter.limiter.usage()
   }
 }

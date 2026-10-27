@@ -68,57 +68,83 @@ export function arrivalPrice(book, fair) {
   return Math.min(book.asks[0].px, Math.max(book.bids[0].px, fair))
 }
 
+const opposite = (side) => (side === 'buy' ? 'sell' : 'buy')
+const sideOf = (book, orderSide) => (orderSide === 'buy' ? book.asks : book.bids)
+
 /**
- * Enter and later exit a hedge of `notional` per leg, assuming the exit meets a book
- * like today's. Returns the four legs, their summed cost, and whether the visible
- * depth can absorb the size at all. `spotRef`/`perpRef` default to the mids.
+ * Enter and later exit a two-leg hedge of `notional` per leg, assuming the exit meets a
+ * book like today's. Each leg is
+ *   { name, book, entry: 'buy' | 'sell', ref, feeBps, execute }
+ * where `execute(book, side, qty, feeBps, ref)` prices one order (a market order by
+ * default; core/execution.js supplies the maker alternative). Legs come back keyed
+ * `${name}Entry` / `${name}Exit`, in the order entries first, then exits.
  */
-export function roundTrip({ spotBook, perpBook, notional, direction, spotFeeBps, perpFeeBps, spotRef = midPrice(spotBook), perpRef = midPrice(perpBook) }) {
-  if (!spotRef || !perpRef || !midPrice(spotBook) || !midPrice(perpBook) || !(notional > 0)) return null
-  const plan = PLANS[direction]
-  const spotQty = notional / spotRef
-  const perpQty = notional / perpRef
-  const legs = {
-    spotEntry: legShortfall(spotBook, plan.spotEntry, spotQty, spotFeeBps, spotRef),
-    perpEntry: legShortfall(perpBook, plan.perpEntry, perpQty, perpFeeBps, perpRef),
-    spotExit: legShortfall(spotBook, plan.spotExit, spotQty, spotFeeBps, spotRef),
-    perpExit: legShortfall(perpBook, plan.perpExit, perpQty, perpFeeBps, perpRef),
+export function hedgeTrip({ legs, notional }) {
+  if (!(notional > 0)) return null
+  const out = {}
+  const qty = {}
+  const order = []
+  for (const leg of legs) {
+    const ref = leg.ref ?? midPrice(leg.book)
+    if (!ref || !midPrice(leg.book)) return null
+    qty[leg.name] = notional / ref
+  }
+  for (const phase of ['Entry', 'Exit']) {
+    for (const leg of legs) {
+      const side = phase === 'Entry' ? leg.entry : opposite(leg.entry)
+      const run = leg.execute ?? legShortfall
+      const key = `${leg.name}${phase}`
+      out[key] = run(leg.book, side, qty[leg.name], leg.feeBps, leg.ref ?? midPrice(leg.book))
+      order.push(key)
+    }
   }
   let costUsd = 0
   let complete = true
   let limiting = null
-  for (const key of LEGS) {
-    const leg = legs[key]
+  for (const key of order) {
+    const leg = out[key]
     costUsd += leg.cost.total
     if (!leg.complete) {
       complete = false
-      if (!limiting || leg.fillRatio < legs[limiting].fillRatio) limiting = key
+      if (!limiting || leg.fillRatio < out[limiting].fillRatio) limiting = key
     }
   }
-  return {
-    notional,
-    direction,
-    spotQty,
-    perpQty,
-    legs,
-    costUsd,
-    costBps: (costUsd / notional) * 1e4,
-    complete,
-    limiting,
-  }
+  return { notional, legs: out, order, qty, costUsd, costBps: (costUsd / notional) * 1e4, complete, limiting }
 }
 
 /**
- * Largest notional the visible books can absorb for a full round trip: the thinnest of
- * the four sides the plan has to cross, valued at each side's own prices.
+ * Largest notional the visible books can absorb for a full round trip. A leg trades
+ * notional ÷ arrival price in base units on both of its sides, so each side holds its
+ * resting size × that price; the thinnest side bounds the trip.
  */
-export function capacity({ spotBook, perpBook, direction }) {
+export function hedgeCapacity(legs) {
+  return Math.min(...legs.flatMap((l) => {
+    const ref = l.ref ?? midPrice(l.book)
+    return [l.entry, opposite(l.entry)].map((side) => ref * sideDepth(sideOf(l.book, side)).qty)
+  }))
+}
+
+/** The spot/perp legs of a carry trade in `direction`. */
+export function carryLegs({ spotBook, perpBook, direction, spotFeeBps, perpFeeBps, spotRef, perpRef, spotExecute, perpExecute }) {
   const plan = PLANS[direction]
-  const sideOf = (book, orderSide) => (orderSide === 'buy' ? book.asks : book.bids)
-  return Math.min(
-    sideDepth(sideOf(spotBook, plan.spotEntry)).notional,
-    sideDepth(sideOf(spotBook, plan.spotExit)).notional,
-    sideDepth(sideOf(perpBook, plan.perpEntry)).notional,
-    sideDepth(sideOf(perpBook, plan.perpExit)).notional,
-  )
+  return [
+    { name: 'spot', book: spotBook, entry: plan.spotEntry, ref: spotRef, feeBps: spotFeeBps, execute: spotExecute },
+    { name: 'perp', book: perpBook, entry: plan.perpEntry, ref: perpRef, feeBps: perpFeeBps, execute: perpExecute },
+  ]
+}
+
+/**
+ * Enter and later exit a spot/perp hedge of `notional` per leg. Returns the four legs,
+ * their summed cost, and whether the visible depth can absorb the size at all.
+ * `spotRef`/`perpRef` default to the mids.
+ */
+export function roundTrip({ notional, direction, ...rest }) {
+  const trip = hedgeTrip({ legs: carryLegs({ direction, ...rest }), notional })
+  if (!trip) return null
+  return { ...trip, direction, spotQty: trip.qty.spot, perpQty: trip.qty.perp }
+}
+
+/** Capacity of a spot/perp round trip; `spotRef`/`perpRef` as in roundTrip. */
+export function capacity({ spotBook, perpBook, direction, spotRef, perpRef }) {
+  return hedgeCapacity(carryLegs({ spotBook, perpBook, direction, spotRef, perpRef }))
 }

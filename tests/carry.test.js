@@ -99,3 +99,14 @@ test('maxProfitable is the real break-even size, not the last grid point', () =>
   assert.ok(net(curve.maxProfitable.notional) > 0)
   assert.ok(net(curve.maxProfitable.notional * 1.01) <= 0)
 })
+
+test('the curve reaches the true depth edge and always contains the chosen size', () => {
+  // Asks priced well above mid: the notional capacity overstates what the asks can fill.
+  const spotBook = { bids: [{ px: 99, sz: 100 }], asks: [{ px: 101, sz: 10 }, { px: 120, sz: 10 }] }
+  const perpBook = { bids: [{ px: 99, sz: 1000 }], asks: [{ px: 101, sz: 1000 }] }
+  const curve = sizeCurve({ spotBook, perpBook, direction: 'carry', spotFeeBps: 0, perpFeeBps: 0, hourlyRate: 0.001, hours: 720, leverage: 2, chosen: 1500 })
+  const last = curve.points[curve.points.length - 1].notional
+  // 20 tokens at a mid of 100 is the most the asks can fill: $2 000.
+  assert.ok(last > 1990 && last <= 2000, `last ${last}`)
+  assert.ok(curve.points.some((p) => p.notional === 1500))
+})

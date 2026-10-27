@@ -268,10 +268,11 @@ export function fundingChart({ history, average, width = 640, height = 200 }) {
     const ht = Math.max(1, Math.abs(y(v) - zero))
     svg.append(s('rect', { x: f.x0 + i * slot, y: top, width: barW, height: ht, rx: barW > 4 ? 1.5 : 0, style: { fill: css(v >= 0 ? 'pos' : 'neg') } }))
   })
-  // Day labels at UTC midnight.
+  // Day labels at UTC midnight, thinned so they never run together on a narrow chart.
+  const everyDays = Math.max(1, Math.ceil(44 / (slot * 24)))
   history.forEach((h, i) => {
     const d = new Date(h.time)
-    if (d.getUTCHours() === 0 && i > 2 && i < n - 3) {
+    if (d.getUTCHours() === 0 && i > 2 && i < n - 3 && Math.floor(h.time / 86_400_000) % everyDays === 0) {
       svg.append(s('text', { x: f.x0 + i * slot, y: f.y0 + 18, 'text-anchor': 'middle' }, `${d.getUTCDate()}.${d.getUTCMonth() + 1}.`))
     }
   })

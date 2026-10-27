@@ -10,8 +10,18 @@ export class WeightLimiter {
    * @param {() => number} o.now  clock (injectable for tests)
    * @param {(fn: () => void, ms: number) => unknown} o.schedule  timer (injectable)
    */
-  constructor({ budget = 1000, windowMs = 60_000, now = () => Date.now(), schedule = (fn, ms) => setTimeout(fn, ms) } = {}) {
+  /**
+   * @param {number} o.background  priority from which a job counts as background work
+   * @param {number} o.headroom    share of the budget background work may never use, so
+   *                               urgent requests (universe, books, an open drawer) find
+   *                               room at once instead of waiting out a full window
+   */
+  constructor({ budget = 1000, windowMs = 60_000, now = () => Date.now(), schedule = (fn, ms) => setTimeout(fn, ms), cancel = (t) => clearTimeout(t), background = 6, headroom = 0.4 } = {}) {
+    this.cancel = cancel
+    this.timerAt = Infinity
     this.budget = budget
+    this.background = background
+    this.headroom = headroom
     this.windowMs = windowMs
     this.now = now
     this.schedule = schedule
@@ -39,7 +49,7 @@ export class WeightLimiter {
   /** Resolves once `weight` fits into the window. Lower `priority` numbers go first. */
   take(weight, priority = 5) {
     return new Promise((resolve) => {
-      const job = { weight: Math.min(weight, this.budget), priority, resolve }
+      const job = { weight: Math.min(weight, priority >= this.background ? this.budget * (1 - this.headroom) : this.budget), priority, resolve }
       const at = this.queue.findIndex((j) => j.priority > priority)
       if (at < 0) this.queue.push(job)
       else this.queue.splice(at, 0, job)
@@ -60,19 +70,27 @@ export class WeightLimiter {
     this.blockedUntil = Math.max(this.blockedUntil, this.now() + ms)
   }
 
+  /** Re-pump after `ms`, unless a wake-up is already due sooner. */
   wake(ms) {
+    const at = this.now() + Math.max(5, ms)
+    if (this.timer && this.timerAt <= at) return
+    if (this.timer) this.cancel(this.timer)
+    this.timerAt = at
     this.timer = this.schedule(() => {
       this.timer = null
+      this.timerAt = Infinity
       this.pump()
     }, Math.max(5, ms))
   }
 
   pump() {
-    if (this.timer) return
     const t = this.now()
     if (t < this.blockedUntil) return this.wake(this.blockedUntil - t)
+    // Background jobs stop short of the full budget; the queue is sorted by priority, so
+    // a background job at its head means no urgent job is waiting behind it.
+    const cap = (job) => (job.priority >= this.background ? this.budget * (1 - this.headroom) : this.budget)
     let used = this.usage()
-    while (this.queue.length && used + this.queue[0].weight <= this.budget) {
+    while (this.queue.length && used + this.queue[0].weight <= cap(this.queue[0])) {
       const job = this.queue.shift()
       this.spent.push({ t, weight: job.weight })
       used += job.weight
@@ -80,7 +98,7 @@ export class WeightLimiter {
     }
     if (!this.queue.length) return
     // Wait until enough of the oldest spends have left the window.
-    let excess = used + this.queue[0].weight - this.budget
+    let excess = used + this.queue[0].weight - cap(this.queue[0])
     let wait = 0
     for (const s of this.spent) {
       excess -= s.weight

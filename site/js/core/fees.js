@@ -1,11 +1,12 @@
-// Taker fees per leg, following the "Fee formula for developers" in the Hyperliquid
-// docs (https://hyperliquid.gitbook.io/hyperliquid-docs/trading/fees).
-//
-// Every leg of the carry is a market order, so only taker rates matter here.
+// Hyperliquid fees per leg, following the "Fee formula for developers" in the docs
+// (https://hyperliquid.gitbook.io/hyperliquid-docs/trading/fees): taker rates for
+// market orders, maker rates for resting orders.
 
-/** Base taker rate in bps by 14-day volume tier (index 0 = < $5M). */
+/** Base rates in bps by 14-day volume tier (index 0 = < $5M). */
 export const PERP_TAKER_BPS = [4.5, 4.0, 3.5, 3.0, 2.8, 2.6, 2.4]
 export const SPOT_TAKER_BPS = [7.0, 6.0, 5.0, 4.0, 3.5, 3.0, 2.5]
+export const PERP_MAKER_BPS = [1.5, 1.2, 0.8, 0.4, 0, 0, 0]
+export const SPOT_MAKER_BPS = [4.0, 3.0, 2.0, 1.0, 0, 0, 0]
 
 export const VOLUME_TIERS = ['< $5 Mio.', '> $5 Mio.', '> $25 Mio.', '> $100 Mio.', '> $500 Mio.', '> $2 Mrd.', '> $7 Mrd.']
 
@@ -41,7 +42,12 @@ export function hip3DeployerShare(deployerFeeScale) {
  */
 export function accountRates({ tier = 0, staking = 0, referral = 0 } = {}) {
   const keep = (1 - (STAKING_DISCOUNTS[staking]?.discount ?? 0)) * (1 - referral)
-  return { perp: PERP_TAKER_BPS[tier] * keep, spot: SPOT_TAKER_BPS[tier] * keep }
+  return {
+    perp: PERP_TAKER_BPS[tier] * keep,
+    spot: SPOT_TAKER_BPS[tier] * keep,
+    perpMaker: PERP_MAKER_BPS[tier] * keep,
+    spotMaker: SPOT_MAKER_BPS[tier] * keep,
+  }
 }
 
 /**
@@ -62,4 +68,25 @@ export function takerFeeBps(market, rates, { aligned = new Set(), stable = new S
   let bps = rates.perp * hip3Scale(market.feeScale) * (market.growthMode === 'enabled' ? 0.1 : 1)
   if (aligned.has(market.collateral)) bps *= (1 - share) * 0.8 + share
   return bps
+}
+
+/**
+ * Maker fee in bps for one market (never a rebate here: rebates need a maker-volume
+ * share the account has to earn first). Stable pairs pay 20 %, growth mode 10 %, HIP-3
+ * scales positive maker fees like taker fees; aligned quotes only boost rebates.
+ */
+export function makerFeeBps(market, rates, { stable = new Set() } = {}) {
+  if (market.kind === 'spot') {
+    const stablePair = stable.has(market.base.name) && stable.has(market.quote)
+    return rates.spotMaker * (stablePair ? 0.2 : 1)
+  }
+  if (!market.dex) return rates.perpMaker
+  return rates.perpMaker * hip3Scale(market.feeScale) * (market.growthMode === 'enabled' ? 0.1 : 1)
+}
+
+/** Hyperliquid fee model for one account: taker and maker bps per market. */
+export function hyperliquidFees(account = {}, { aligned = new Set(['USDH']), stable = new Set(['USDC']) } = {}) {
+  const rates = accountRates(account)
+  const quotes = { aligned, stable }
+  return { rates, taker: (market) => takerFeeBps(market, rates, quotes), maker: (market) => makerFeeBps(market, rates, quotes) }
 }

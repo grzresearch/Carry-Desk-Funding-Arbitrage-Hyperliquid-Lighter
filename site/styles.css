@@ -138,6 +138,10 @@ select {
   outline-offset: 2px;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -207,6 +211,7 @@ select {
 }
 
 .live-dot {
+  position: relative;
   width: 8px;
   height: 8px;
   border-radius: 50%;
@@ -216,7 +221,17 @@ select {
 
 .live[data-state="ok"] .live-dot {
   background: var(--good);
-  animation: pulse 2.4s ease-in-out infinite;
+}
+
+/* A ring that grows and fades: transform and opacity only, so the compositor animates
+   it without repainting the page every frame. */
+.live[data-state="ok"] .live-dot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--good);
+  animation: pulse 2.4s ease-out infinite;
 }
 
 .live[data-state="busy"] .live-dot {
@@ -228,18 +243,30 @@ select {
 }
 
 @keyframes pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(12, 163, 12, 0.45); }
-  50% { box-shadow: 0 0 0 5px rgba(12, 163, 12, 0); }
+  0% { transform: scale(1); opacity: 0.45; }
+  60%, 100% { transform: scale(2.25); opacity: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .live[data-state="ok"] .live-dot { animation: none; }
+  .live[data-state="ok"] .live-dot::after { animation: none; opacity: 0; }
 }
 
 .live-api {
   font-size: 11px;
   color: var(--muted);
   letter-spacing: 0.04em;
+}
+
+.live-meters {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.live-venue {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 
 .live-meter {
@@ -289,6 +316,74 @@ select {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+/* ── View tabs ────────────────────────────────────────────── */
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin: 14px var(--gutter) 4px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.tabs button {
+  display: grid;
+  gap: 1px;
+  justify-items: start;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  padding: 6px 14px 9px;
+  margin-bottom: -1px;
+  cursor: pointer;
+  color: var(--text-2);
+  white-space: nowrap;
+  text-align: left;
+}
+
+.tabs button:hover {
+  color: var(--text);
+}
+
+.tabs button[aria-selected="true"] {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.tab-name {
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.tab-sub {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.tab-count {
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.tabs button[aria-selected="true"] .tab-count {
+  background: var(--accent-text);
+  color: var(--page);
 }
 
 /* ── Controls & filters ───────────────────────────────────── */
@@ -453,6 +548,32 @@ select {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
+}
+
+.popover-body fieldset {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0 0 10px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+}
+
+.popover-body legend {
+  padding: 0 0 4px;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.popover-body select {
+  width: 100%;
+  min-width: 0;
+}
+
+.kpi .tile-sub {
+  white-space: normal;
 }
 
 .popover-body label {
@@ -713,11 +834,13 @@ table.pairs {
   margin-right: 4px;
 }
 
-.leg-key.spot {
+.leg-key.spot,
+.leg-key.a {
   background: var(--spot);
 }
 
-.leg-key.perp {
+.leg-key.perp,
+.leg-key.b {
   background: var(--perp);
 }
 
@@ -1222,6 +1345,26 @@ table.legs-table {
 /* ── Small screens: rows become cards ─────────────────────── */
 
 @media (max-width: 860px) {
+  .tabs {
+    margin-top: 10px;
+    gap: 0;
+  }
+
+  .tabs button {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 6px 8px 8px;
+  }
+
+  .tab-name {
+    font-size: 14px;
+  }
+
+  .tab-sub {
+    font-size: 11px;
+    gap: 4px;
+  }
+
   :root {
     --gutter: 16px;
   }

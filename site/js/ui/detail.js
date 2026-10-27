@@ -3,47 +3,40 @@
 
 import { h, icon, mount } from './dom.js'
 import * as fmt from '../core/format.js'
-import { LEGS, PLANS } from '../core/shortfall.js'
+import { PLANS } from '../core/shortfall.js'
 import { sideDepth } from '../core/book.js'
 import { fundingRate } from '../core/evaluate.js'
 import { sizeCurveChart, depthChart, fundingChart } from './charts.js'
+import { costParts } from './table.js'
 import { KIND, KIND_HELP, CATEGORY, STATUS, DIRECTION, LEG, SIDE, FUNDING_SOURCE, dexLabel, statusLabel } from './labels.js'
 
-const APP = 'https://app.hyperliquid.xyz/trade/'
-
-function legCard(title, key, rows, link) {
+export function legCard(title, key, rows, link) {
   return h('div', { class: 'leg-card' },
     h('div', { class: 'leg-title' }, h('span', null, h('i', { class: `leg-key ${key}` }), title), link),
     h('dl', null, rows.flatMap(([k, v]) => [h('dt', null, k), h('dd', null, v)])))
 }
 
-function kpi(label, value, sub, tone) {
+export function kpi(label, value, sub, tone) {
   return h('div', { class: 'kpi' },
     h('div', { class: 'tile-label' }, label),
     h('div', { class: `tile-value ${tone ?? ''}` }, value),
     sub ? h('div', { class: 'tile-sub' }, sub) : null)
 }
 
-function section(title, lede, ...body) {
+export function section(title, lede, ...body) {
   return h('section', { class: 'section' }, h('h3', null, title), lede ? h('p', { class: 'lede' }, lede) : null, body)
 }
 
-function waterfall(r) {
+export function waterfall(r) {
   const { econ, trip } = r
-  let spread = 0
-  let impact = 0
-  let fee = 0
-  for (const leg of Object.values(trip.legs)) {
-    spread += leg.cost.spread
-    impact += leg.cost.impact
-    fee += leg.cost.fee
-  }
+  const { spread, impact, adverse, fee } = costParts(trip)
   const steps = [
     { label: `Funding ${fmt.duration(econ.hours)}`, value: econ.fundingUsd },
     econ.basisUsd ? { label: 'Basis-Konvergenz', value: econ.basisUsd } : null,
-    { label: 'Spread (½ je Order)', value: -spread },
+    { label: spread < 0 ? 'Spread (Maker verdient)' : 'Spread (½ je Order)', value: -spread },
     { label: 'Markt-Impact', value: -impact },
-    { label: 'Taker-Gebühren', value: -fee },
+    adverse ? { label: 'Adverse Selection', value: -adverse } : null,
+    { label: 'Gebühren', value: -fee },
   ].filter(Boolean)
   let run = 0
   const spans = steps.map((st) => {
@@ -66,28 +59,38 @@ function waterfall(r) {
       h('span', { class: `num ${econ.netUsd >= 0 ? 'pos' : 'neg'}` }, fmt.usd(econ.netUsd, { sign: true }))))
 }
 
+const SPOT_PERP_LEGS = { name: (key) => LEG[key], cls: (key) => (key.startsWith('spot') ? 'spot' : 'perp') }
+
+/** How an order is placed: a market order, or resting as maker with its fill odds. */
+function orderLabel(leg) {
+  if (!leg.maker) return SIDE[leg.side]
+  return `${SIDE[leg.side]} · Maker ${fmt.pct(leg.maker.filledShare, { digits: 0 })}`
+}
+
 // Results first (cost, fill), mechanics after: the table scrolls sideways on small
 // screens, and what matters must be visible without scrolling.
-function legsTable(trip) {
-  const head = ['Leg', 'Summe bps', 'Kosten', 'Fill', 'Spread', 'Impact', 'Gebühr', 'Order', 'Menge', 'Ref.-Preis', 'VWAP', 'Schlechtester Px', 'Levels']
-  const rows = LEGS.map((key) => {
+export function legsTable(trip, legs = SPOT_PERP_LEGS) {
+  const maker = trip.order.some((k) => trip.legs[k].maker)
+  const head = ['Leg', 'Summe bps', 'Kosten', 'Fill', 'Spread', 'Impact', maker ? 'Adverse' : null, 'Gebühr', 'Order', 'Menge', 'Ref.-Preis', 'VWAP', 'Schlechtester Px', 'Levels'].filter(Boolean)
+  const rows = trip.order.map((key) => {
     const leg = trip.legs[key]
     return h('tr', null,
-      h('td', null, h('i', { class: `leg-key ${key.startsWith('spot') ? 'spot' : 'perp'}` }), LEG[key]),
+      h('td', null, h('i', { class: `leg-key ${legs.cls(key)}` }), legs.name(key)),
       h('td', null, h('strong', null, fmt.bps(leg.bps.total))),
       h('td', null, fmt.usd(leg.cost.total)),
       h('td', { class: leg.complete ? null : 'neg' }, fmt.pct(leg.fillRatio, { digits: 0 })),
       h('td', null, fmt.bps(leg.bps.spread)),
       h('td', null, fmt.bps(leg.bps.impact)),
+      maker ? h('td', null, fmt.bps(leg.bps.adverse ?? 0)) : null,
       h('td', null, fmt.bps(leg.bps.fee)),
-      h('td', null, SIDE[leg.side]),
+      h('td', { title: leg.maker ? 'Limit-Order am besten Kurs; der Rest wird nach der Wartezeit per Market-Order gefüllt' : null }, orderLabel(leg)),
       h('td', null, fmt.qty(leg.filled)),
       h('td', null, fmt.price(leg.mid)),
       h('td', null, fmt.price(leg.vwap)),
       h('td', null, fmt.price(leg.worstPx)),
       h('td', null, String(leg.levelsUsed)))
   })
-  const sum = (f) => LEGS.reduce((a, k) => a + f(trip.legs[k]), 0)
+  const sum = (f) => trip.order.reduce((a, k) => a + f(trip.legs[k]), 0)
   return h('div', { class: 'legs-scroll card' },
     h('table', { class: 'legs-table' },
       h('caption', { class: 'sr-only' }, 'Implementation Shortfall je Leg in Basispunkten der Positionsgröße'),
@@ -100,11 +103,32 @@ function legsTable(trip) {
         h('td'),
         h('td', null, fmt.bps(sum((l) => l.bps.spread))),
         h('td', null, fmt.bps(sum((l) => l.bps.impact))),
+        maker ? h('td', null, fmt.bps(sum((l) => l.bps.adverse ?? 0))) : null,
         h('td', null, fmt.bps(sum((l) => l.bps.fee))),
         h('td'), h('td'), h('td'), h('td'), h('td'), h('td')))))
 }
 
-function sizeTable(points) {
+/**
+ * How each maker order is expected to play out: what it waits behind, the flow that
+ * clears it, and what share fills before the rest is taken.
+ */
+export function makerNotes(trip, legs = SPOT_PERP_LEGS) {
+  const notes = trip.order.filter((k) => trip.legs[k].maker).map((key) => {
+    const leg = trip.legs[key]
+    const m = leg.maker
+    return h('li', null,
+      h('strong', null, legs.name(key)), ': ',
+      `Limit ${SIDE[leg.side].toLowerCase()} zu ${fmt.price(leg.best)}, davor ${fmt.usd(m.queueUsd)} in der Queue, Gegenflow ~${fmt.usd(m.flowUsd)}/s, σ ${fmt.bps(m.sigma * 1e4, { digits: 2 })} bps/√s${m.estimated ? ' (Schätzung, Kerzen laden)' : ''}. `,
+      `In ${m.waitMin} min gefüllt: ${fmt.pct(m.filledShare, { digits: 0 })} (komplett mit ${fmt.pct(m.fullFill, { digits: 0 })} Wahrscheinlichkeit, im Mittel ${fmt.duration(m.openSec / 3600)} offen), Adverse Selection ${fmt.bps(leg.bps.adverse)} bps; der Rest geht als Market-Order.`)
+  })
+  if (!notes.length) return null
+  return h('details', { class: 'fine maker-notes' },
+    h('summary', null, 'Maker-Simulation je Order'),
+    h('ul', null, notes),
+    h('p', null, 'Modell: Eine Einheit der Order füllt, wenn der faire Preis die Distanz m = halber Spread + Y·σ·√(Queue davor / Gegenflow) auf sie zuläuft (in der Wartezeit T mit Wahrscheinlichkeit erfc(m / σ√2T)) und auf deiner Seite genug Volumen handelt (Verteilung aus 1-Minuten-Kerzen). Gefüllt wird also genau dann, wenn sich der Preis gegen dich bewegt – das ist die Adverse Selection, plus das Weiterlaufen des Preises in den Sekunden nach dem Fill. Der Rest geht nach T als Market-Order ins Buch. Y = 0,35, kalibriert an einem Queue-Backtest auf aufgezeichneten Orderbüchern und Trades.'))
+}
+
+export function sizeTable(points) {
   const pick = points.filter((_, i) => i % Math.ceil(points.length / 8) === 0 || i === points.length - 1)
   return h('details', { class: 'fine' },
     h('summary', null, 'Als Tabelle'),
@@ -117,6 +141,7 @@ function sizeTable(points) {
 
 function risks(r, settings, history) {
   const p = r.pair
+  const hl = p.venue !== 'lt'
   const out = []
   const add = (tone, text) => out.push({ tone, text })
   if (r.direction === 'reverse') add('warn', 'Negatives Funding: verdient wird mit Short Spot · Long Perp. Dafür brauchst du den Spot-Token bereits im Bestand (oder eine Leihe) – sonst ist die Position nicht umsetzbar.')
@@ -135,15 +160,20 @@ function risks(r, settings, history) {
     add('info', `Perp-${side} mit ${settings.leverage}× Hebel: bei starkem ${move} droht Liquidation, bevor der Gewinn auf dem Spot-Leg gegengerechnet ist (außer bei Portfolio-Margin).`)
   }
   const maxMarket = (p.perp.maxLeverage ?? 1) >= 25 ? 30e6 : p.perp.maxLeverage >= 20 ? 5e6 : p.perp.maxLeverage >= 10 ? 2e6 : 5e5
-  if (settings.notional > maxMarket) add('warn', `Eine einzelne Market-Order auf diesem Perp ist auf ${fmt.usd(maxMarket)} begrenzt (abhängig vom Max-Hebel) – die Position muss in mehrere Orders aufgeteilt werden.`)
+  if (hl && settings.notional > maxMarket) add('warn', `Eine einzelne Market-Order auf diesem Perp ist auf ${fmt.usd(maxMarket)} begrenzt (abhängig vom Max-Hebel) – die Position muss in mehrere Orders aufgeteilt werden.`)
   if (p.perp.collateral !== p.spot.quote) add('info', `Spot notiert in ${p.spot.quote}, der Perp ist in ${p.perp.collateral} besichert – kleines Stablecoin-Basisrisiko.`)
-  if (p.category === 'equity' && p.perp.dex) add('info', 'Aktien-Perps laufen 24/7, die Börse nicht: außerhalb der Handelszeiten folgt das Oracle internen Preisen, Spot und Perp können am Wochenende auseinanderlaufen.')
+  if (p.category === 'equity' && (p.perp.dex || !hl)) add('info', 'Aktien-Perps laufen 24/7, die Börse nicht: außerhalb der Handelszeiten folgt das Oracle internen Preisen, Spot und Perp können am Wochenende auseinanderlaufen.')
   if (p.perp.oiCap && p.perp.openInterestUsd && p.perp.openInterestUsd > 0.8 * p.perp.oiCap) add('warn', `Open Interest bei ${fmt.pct(p.perp.openInterestUsd / p.perp.oiCap, { digits: 0 })} des Caps – neue Positionen können blockiert werden.`)
   if (history?.length >= 24) {
     const share = history.filter((x) => Math.sign(x.rate) === Math.sign(r.rate.value || 1)).length / history.length
     if (share < 0.7) add('warn', `Funding hatte in nur ${fmt.pct(share, { digits: 0 })} der letzten ${history.length} Stunden dieses Vorzeichen – der Carry ist instabil.`)
   }
+  if (!hl) add('info', 'Lighter-Standard-Accounts handeln gebührenfrei, Taker-Orders kommen aber mit 300 ms Verzögerung an – in schnellen Märkten kann sich das Buch bis dahin bewegen.')
   add('info', 'Exit-Kosten sind mit dem heutigen Orderbuch geschätzt; dünne Bücher können zum Ausstieg deutlich schlechter sein.')
+  return riskList(out)
+}
+
+export function riskList(out) {
   return h('ul', { class: 'risks' }, out.map((x) => h('li', null,
     h('span', { style: { color: x.tone === 'warn' ? 'var(--warning)' : 'var(--muted)' } }, icon(x.tone === 'warn' ? 'warn' : 'info')),
     h('span', null, x.text))))
@@ -152,17 +182,30 @@ function risks(r, settings, history) {
 function fundingSection(r, history, width) {
   if (!history) return section('Funding-Historie', 'Lädt die letzten 7 Tage …')
   if (!history.length) return section('Funding-Historie', 'Keine Historie verfügbar.')
-  const avg7 = fundingRate(r.pair.perp, history, 'avg7d').value
-  const avg24 = fundingRate(r.pair.perp, history, 'avg24').value
+  return fundingHistory(r.pair.perp, history, width)
+}
+
+/** Hourly funding of the last days, with averages and how often it was positive. */
+export function fundingHistory(perp, history, width, { title = 'Funding-Historie (7 Tage, stündlich)', labels = ['Shorts erhalten', 'Longs erhalten'], now = perp.funding } = {}) {
+  const avg7 = fundingRate({ funding: now }, history, 'avg7d').value
+  const avg24 = fundingRate({ funding: now }, history, 'avg24').value
   const positive = history.filter((x) => x.rate > 0).length / history.length
-  return section('Funding-Historie (7 Tage, stündlich)',
-    `Ø 7 T ${fmt.pct(avg7 * 8760, { sign: true })} p.a. · Ø 24 h ${fmt.pct(avg24 * 8760, { sign: true })} p.a. · aktuell ${fmt.pct(r.pair.perp.funding * 8760, { sign: true })} p.a. · ${fmt.pct(positive, { digits: 0 })} der Stunden positiv`,
+  return section(title,
+    `Ø 7 T ${fmt.pct(avg7 * 8760, { sign: true })} p.a. · Ø 24 h ${fmt.pct(avg24 * 8760, { sign: true })} p.a. · aktuell ${fmt.pct(now * 8760, { sign: true })} p.a. · ${fmt.pct(positive, { digits: 0 })} der Stunden positiv`,
     h('div', { class: 'card' },
       h('div', { class: 'legend' },
-        h('span', null, h('i', { class: 'area', style: { background: 'var(--pos)' } }), 'Shorts erhalten'),
-        h('span', null, h('i', { class: 'area', style: { background: 'var(--neg)' } }), 'Longs erhalten'),
+        h('span', null, h('i', { class: 'area', style: { background: 'var(--pos)' } }), labels[0]),
+        h('span', null, h('i', { class: 'area', style: { background: 'var(--neg)' } }), labels[1]),
         h('span', null, h('i', { style: { background: 'var(--text-2)' } }), 'Durchschnitt')),
       fundingChart({ history, average: avg7, width })))
+}
+
+/** What the shortfall table measures, for the execution chosen. */
+export function executionText(trip) {
+  const maker = trip.order.some((k) => trip.legs[k].maker)
+  return maker
+    ? 'Gegen den Preis zum Entscheidungszeitpunkt (Mid), in bps der Positionsgröße. Market-Orders zahlen halben Spread + Impact + Taker-Gebühr; Maker-Orders verdienen den halben Spread auf dem gefüllten Teil, zahlen Adverse Selection und holen den Rest nach der Wartezeit per Market-Order nach.'
+    : 'Market-Order gegen den Preis zum Entscheidungszeitpunkt (Mid): halber Spread + Impact beim Abarbeiten der Levels + Taker-Gebühr, in bps der Positionsgröße.'
 }
 
 const growth = (settings) =>
@@ -171,21 +214,21 @@ const growth = (settings) =>
     : 'Funding wächst mit der Größe – abzüglich dessen, was dein Perp-Order an Premium wegnimmt –, der Shortfall überproportional'
 
 /** One sentence on how your own order changes the funding you earn. */
-function impactNote(r, settings) {
+function impactNote(r, settings, venueName) {
   if (settings.fundingImpact === 'off' || !r.atSize) return ''
   const base = r.direction === 'carry' ? r.fundingApr : -r.fundingApr
   const at = r.atSize.apr
   if (Math.abs(at - base) < 0.0005) return ' Dein Perp-Order verändert das Funding bei dieser Größe nicht – es liegt im Clamp-Band am Zins-Basiswert oder das Buch ist tief genug.'
-  return ` Dein Perp-${r.direction === 'carry' ? 'Short' : 'Long'} verschiebt die Premium, aus der Hyperliquid das Funding berechnet: statt ${fmt.pct(base, { sign: true })} rechnen wir mit ${fmt.pct(at, { sign: true })} p.a.`
+  return ` Dein Perp-${r.direction === 'carry' ? 'Short' : 'Long'} verschiebt die Premium, aus der ${venueName} das Funding berechnet: statt ${fmt.pct(base, { sign: true })} rechnen wir mit ${fmt.pct(at, { sign: true })} p.a.`
 }
 
 /** What the missing or one-sided book looks like, so a listing can be followed live. */
-function bookMessage(r, data) {
+function bookMessage(r, venue) {
   const p = r.pair
   if (r.status === 'loading') return 'Orderbücher werden geladen …'
   if (r.status === 'mismatch') return 'Die echten Quotes des Spot-Markts passen nicht zum Perp – kein Hedge.'
   const legName = r.missing === 'spot' ? 'Spot' : 'Perp'
-  const book = data.books.get(r.missing === 'spot' ? p.spot.coin : p.perp.coin)
+  const book = venue.books.get(r.missing === 'spot' ? p.spot.key : p.perp.key)
   if (r.oneSided && book) {
     const side = book.bids?.length ? 'bids' : 'asks'
     const levels = book[side]
@@ -197,10 +240,18 @@ function bookMessage(r, data) {
     : 'Der Perp-Markt hat aktuell kein Orderbuch.'
 }
 
-export function renderDetail(el, r, settings, data) {
+export const drawerWidth = (el) => Math.max(300, Math.min(712, (el.closest('.drawer-panel')?.clientWidth ?? 760) - 48 - 30))
+
+export const tradeLink = (venue, market) => h('a', { href: venue.adapter.tradeUrl(market), target: '_blank', rel: 'noopener', class: 'fine' }, `Auf ${venue.adapter.name} handeln ↗`)
+
+/**
+ * @param {VenueData} venue the pair's venue (books, history, adapter)
+ */
+export function renderDetail(el, r, settings, venue) {
   const p = r.pair
-  const width = Math.max(300, Math.min(712, (el.closest('.drawer-panel')?.clientWidth ?? 760) - 48 - 30))
-  const history = data.history.get(p.perp.coin)
+  const width = drawerWidth(el)
+  const history = venue.history.get(p.perp.key)
+  const lighter = p.venue === 'lt'
   const st = STATUS[r.status]
   const title = h('h2', { id: 'drawer-title' }, p.underlying)
 
@@ -217,9 +268,9 @@ export function renderDetail(el, r, settings, data) {
         ['Spread', r.spread.spot == null ? '–' : `${fmt.bps(r.spread.spot)} bps`],
         ['Volumen 24 h', fmt.usd(p.spot.volume)],
         ['Taker-Gebühr', `${fmt.bps(r.fees.spot, { digits: 2 })} bps`],
-      ], h('a', { href: `${APP}${p.spot.base.name}/${p.spot.quote}`, target: '_blank', rel: 'noopener', class: 'fine' }, 'Handeln ↗')),
+      ], tradeLink(venue, p.spot)),
       legCard(`Perp · ${p.perp.coin}`, 'perp', [
-        ['Dex', `${dexLabel(p.perp)}${p.perp.growthMode === 'enabled' ? ' · Growth Mode' : ''}`],
+        lighter ? ['Börse', `Lighter · Markt ${p.perp.marketId}`] : ['Dex', `${dexLabel(p.perp)}${p.perp.growthMode === 'enabled' ? ' · Growth Mode' : ''}`],
         ['Mid / Oracle', `${fmt.price(r.perpMid)} / ${fmt.price(p.perp.oracle)}`],
         ['Funding jetzt', `${fmt.rate(p.perp.funding)} /h · ${fmt.pct(p.perp.funding * 8760, { sign: true })} p.a.`],
         ...(r.atSize && settings.fundingImpact !== 'off'
@@ -228,12 +279,12 @@ export function renderDetail(el, r, settings, data) {
         ['Open Interest', `${fmt.usd(p.perp.openInterestUsd)}${p.perp.oiCap ? ` von ${fmt.usd(p.perp.oiCap)}` : ''}`],
         ['Max. Hebel · Margin', `${p.perp.maxLeverage}× · ${p.perp.onlyIsolated ? 'isoliert' : 'cross'} · ${p.perp.collateral}`],
         ['Taker-Gebühr', `${fmt.bps(r.fees.perp, { digits: 2 })} bps`],
-      ], h('a', { href: `${APP}${p.perp.coin}`, target: '_blank', rel: 'noopener', class: 'fine' }, 'Handeln ↗'))))
+      ], tradeLink(venue, p.perp))))
 
   const blocks = [head]
 
   if (!r.trip) {
-    blocks.push(h('p', { class: 'card' }, bookMessage(r, data)))
+    blocks.push(h('p', { class: 'card' }, bookMessage(r, venue)))
     blocks.push(fundingSection(r, history, width))
     blocks.push(section('Risiken & Hinweise', null, risks(r, settings, history)))
     return mount(el, h('div', { class: 'detail' }, blocks))
@@ -250,12 +301,13 @@ export function renderDetail(el, r, settings, data) {
     kpi('Kosten Ein + Aus', econ ? `${fmt.bps(trip.costBps)} bps` : '–', econ ? fmt.usd(trip.costUsd) : 'unvollständig')))
 
   blocks.push(section('Woher der Ertrag kommt',
-    `Funding ${FUNDING_SOURCE[r.rate.source]}${r.rate.fallback ? ' (Historie lädt noch)' : ''} über ${fmt.duration(settings.hours)} gegen die Kosten, ${fmt.usd(settings.notional)} je Leg ein- und wieder auszusteigen.${impactNote(r, settings)}${settings.basisMode === 'converge' && r.basis != null ? ' Basis-Szenario: Spot und Perp laufen bis zum Exit zusammen.' : ''}`,
+    `Funding ${FUNDING_SOURCE[r.rate.source]}${r.rate.fallback ? ' (Historie lädt noch)' : ''} über ${fmt.duration(settings.hours)} gegen die Kosten, ${fmt.usd(settings.notional)} je Leg ein- und wieder auszusteigen.${impactNote(r, settings, venue.adapter.name)}${settings.basisMode === 'converge' && r.basis != null ? ' Basis-Szenario: Spot und Perp laufen bis zum Exit zusammen.' : ''}`,
     econ ? waterfall(r) : h('p', { class: 'card' }, 'Die sichtbare Tiefe reicht für diese Größe nicht – Netto nicht berechenbar.')))
 
   blocks.push(section('Implementation Shortfall je Leg',
-    `Market-Order gegen den Preis zum Entscheidungszeitpunkt (Mid): halber Spread + Impact beim Abarbeiten der Levels + Taker-Gebühr, in bps der Positionsgröße. ${PLANS[r.direction].spotEntry === 'buy' ? 'Entry: Spot kaufen, Perp shorten. Exit: Spot verkaufen, Perp zurückkaufen.' : 'Entry: Spot verkaufen, Perp kaufen. Exit umgekehrt.'}`,
+    `${executionText(trip)} ${PLANS[r.direction].spotEntry === 'buy' ? 'Entry: Spot kaufen, Perp shorten. Exit: Spot verkaufen, Perp zurückkaufen.' : 'Entry: Spot verkaufen, Perp kaufen. Exit umgekehrt.'}`,
     legsTable(trip),
+    makerNotes(trip),
     !trip.complete ? h('p', { class: 'fine neg' }, `${LEG[trip.limiting]} kann die Größe nicht vollständig füllen – sichtbare Tiefe ${fmt.usd(curve.capacity)}.`) : null))
 
   if (curve.points.length > 2) {
@@ -272,8 +324,8 @@ export function renderDetail(el, r, settings, data) {
   const plan = PLANS[r.direction]
   const spotSide = plan.spotEntry === 'buy' ? 'asks' : 'bids'
   const perpSide = plan.perpEntry === 'buy' ? 'asks' : 'bids'
-  const spotBook = data.books.get(p.spot.coin)
-  const perpBook = data.books.get(p.perp.coin)
+  const spotBook = venue.books.get(p.spot.key)
+  const perpBook = venue.books.get(p.perp.key)
   blocks.push(section('Liquiditätsprofil beim Einstieg',
     'Wie viel Volumen liegt bis zu welchem Abstand vom Mid? Wo eine Kurve deine Größe kreuzt, liegt der schlechteste Fill dieses Legs.',
     h('div', { class: 'card' },
@@ -292,7 +344,7 @@ export function renderDetail(el, r, settings, data) {
   blocks.push(fundingSection(r, history, width))
   blocks.push(section('Risiken & Hinweise', null, risks(r, settings, history)))
   blocks.push(h('p', { class: 'fine' },
-    `Annahmen: Taker-Orders auf beiden Legs, Exit gegen ein Buch wie das heutige, Funding ${FUNDING_SOURCE[r.rate.source]} konstant über ${fmt.duration(settings.hours)}${settings.fundingImpact === 'off' ? ' (ohne eigenen Einfluss)' : settings.fundingImpact === 'max' ? ', abzüglich dessen, was dein Perp-Order an Premium wegnimmt (Obergrenze: die verbrauchte Liquidität kommt nie zurück)' : ', abzüglich dessen, was dein Perp-Order an Premium wegnimmt (gewichtet mit deiner Größe relativ zum Stunden-Volumen des Perps)'}, Basis ${settings.basisMode === 'converge' ? 'konvergiert bis zum Exit' : 'bleibt unverändert'}. Bücher über die 20 sichtbaren Levels hinaus werden konservativ aus aggregierten Leveln ergänzt.`))
+    `Annahmen: ${settings.exec === 'taker' ? 'Market-Orders auf beiden Legs' : `${settings.exec === 'maker' ? 'beide Legs' : settings.exec === 'makerA' ? 'Spot' : 'Perp'} als Maker mit ${settings.wait} min Wartezeit, Rest per Market-Order`}, Exit gegen ein Buch wie das heutige, Funding ${FUNDING_SOURCE[r.rate.source]} konstant über ${fmt.duration(settings.hours)}${settings.fundingImpact === 'off' ? ' (ohne eigenen Einfluss)' : settings.fundingImpact === 'max' ? ', abzüglich dessen, was dein Perp-Order an Premium wegnimmt (Obergrenze: die verbrauchte Liquidität kommt nie zurück)' : ', abzüglich dessen, was dein Perp-Order an Premium wegnimmt (gewichtet mit deiner Größe relativ zum Stunden-Volumen des Perps)'}, Basis ${settings.basisMode === 'converge' ? 'konvergiert bis zum Exit' : 'bleibt unverändert'}. ${lighter ? 'Lighter liefert das volle Orderbuch per WebSocket (bis ±10 % um den besten Kurs).' : 'Bücher über die 20 sichtbaren Levels hinaus werden konservativ aus aggregierten Leveln ergänzt.'}`))
 
   return mount(el, h('div', { class: 'detail' }, blocks))
 }

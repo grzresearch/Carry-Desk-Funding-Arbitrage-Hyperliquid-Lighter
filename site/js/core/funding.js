@@ -1,14 +1,16 @@
-// Funding as Hyperliquid computes it, and how much your own perp order moves it.
+// Funding as the exchanges compute it, and how much your own perp order moves it.
 //
-// The hourly rate is m · (P + clamp(I − P, −c, c)) / 8: the premium index P plus an
-// interest rate I it is clamped towards. While P stays within ±c of I, funding sits
-// exactly at the interest rate (10,95 % p.a. on the main dex) whatever the premium —
-// only funding above that baseline comes from the premium, and only that part is
-// what a short pushes away.
+// The hourly rate is m · (P + clamp(I − P, −c, c)) / 8 on Hyperliquid: the premium
+// index P plus an interest rate I it is clamped towards. While P stays within ±c of I,
+// funding sits exactly at the interest rate (10,95 % p.a. on the main dex) whatever the
+// premium — only funding above that baseline comes from the premium, and only that part
+// is what a short pushes away. Lighter uses the same shape, but scales only the premium
+// and the clamp by its multiplier, not the interest rate, and caps per market.
 //
 // P is read from the book: impact prices are the VWAPs of trading a small notional
-// ($6k; $20k for BTC/ETH) on each side. A market order of ours removes liquidity, so
-// the impact price on that side moves and with it the premium.
+// ($6k; $20k for BTC/ETH on Hyperliquid, $500 of margin on Lighter) on each side. A
+// market order of ours removes liquidity, so the impact price on that side moves and
+// with it the premium.
 //
 // How long that lasts depends on how fast the book refills. Assuming it never does is
 // an upper bound ('max'). The realistic estimate ('real') weights the shift by your
@@ -33,15 +35,26 @@ export function fundingParams(perp) {
   }
 }
 
-/** Notional the exchange uses for impact prices. */
+/** Notional Hyperliquid uses for impact prices. */
 export function impactNotional(perp) {
   return !perp.dex && (perp.symbol === 'BTC' || perp.symbol === 'ETH') ? 20_000 : 6_000
 }
 
-/** Hourly funding for a premium index P. */
-export function hourlyFunding(P, { m, I, c }) {
-  const f8 = P + Math.min(c, Math.max(-c, I - P))
-  return Math.max(-FUNDING_CAP, Math.min(FUNDING_CAP, (m * f8) / 8))
+/** How Hyperliquid reads the premium of a perp: HIP-3 dexes use the impact mid. */
+export function hyperliquidImpact(perp) {
+  return { hip3: Boolean(perp.dex), impactUsd: impactNotional(perp) }
+}
+
+/**
+ * Hourly funding for a premium index P: (m·P + clamp(i − m·P, ±m·c)) / 8, capped.
+ * Hyperliquid scales the interest rate too (i = m·I, which is m · (P + clamp(I − P, ±c)));
+ * Lighter does not (`scaleInterest: false`, i = I) and caps at its own big clamp.
+ */
+export function hourlyFunding(P, { m, I, c, scaleInterest = true, cap = FUNDING_CAP }) {
+  const premium = m * P
+  const interest = scaleInterest ? m * I : I
+  const f8 = premium + Math.min(m * c, Math.max(-m * c, interest - premium))
+  return Math.max(-cap, Math.min(cap, f8 / 8))
 }
 
 /** VWAP of trading `usd` notional into `levels`; a dry book fills the rest at `fallback`. */
@@ -60,8 +73,8 @@ function impactPrice(levels, usd, fallback) {
 }
 
 /**
- * Premium index of a book. The main dex counts only impact prices beyond the oracle;
- * HIP-3 dexes use the mid of the impact prices.
+ * Premium index of a book. Hyperliquid's main dex and Lighter count only impact prices
+ * beyond the oracle; HIP-3 dexes use the mid of the impact prices.
  */
 export function premiumIndex(book, oracle, { hip3, impactUsd, fallback = {} }) {
   const ib = impactPrice(book.bids, impactUsd, fallback.bids)
@@ -88,10 +101,10 @@ export function afterOrder(book, side, qty) {
 
 /**
  * How much a market order of `qty` moves the premium index (signed). A book the order
- * empties is priced at the order's worst fill.
+ * empties is priced at the order's worst fill. `opts` says how the venue reads the
+ * premium: { hip3, impactUsd }.
  */
-export function premiumShift(book, side, qty, oracle, perp) {
-  const opts = { hip3: Boolean(perp.dex), impactUsd: impactNotional(perp) }
+export function premiumShift(book, side, qty, oracle, opts) {
   const before = premiumIndex(book, oracle, opts)
   const worst = walk(side === 'buy' ? book.asks : book.bids, qty).worstPx
   const after = premiumIndex(afterOrder(book, side, qty), oracle, { ...opts, fallback: { [side === 'buy' ? 'asks' : 'bids']: worst } })
