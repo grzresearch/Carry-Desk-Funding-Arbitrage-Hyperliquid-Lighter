@@ -2,10 +2,11 @@
 
 import { midPrice, spreadBps } from './book.js'
 import { roundTrip, arrivalPrice, PLANS } from './shortfall.js'
-import { fundingParams, premiumShift, fundingAtSize, persistence } from './funding.js'
+import { fundingParams, premiumShift, hyperliquidImpact, fundingAtSize, persistence } from './funding.js'
+import { hyperliquidFees } from './fees.js'
 import { TOLERANCE } from './matching.js'
 import { carryEconomics, sizeCurve, basisBps, directionFor } from './carry.js'
-import { takerFeeBps } from './fees.js'
+import { takenQty } from './execution.js'
 
 const HOUR = 3_600_000
 
@@ -37,21 +38,32 @@ export function premiumFor(perp, history, rate) {
 
 const twoSided = (book) => Boolean(book?.bids?.length && book?.asks?.length)
 
+/** Venue-neutral defaults: Hyperliquid's fee and funding models. */
+const HL_FUNDING = {
+  params: fundingParams,
+  premiumShift: (book, side, qty, perp, ref) => premiumShift(book, side, qty, perp.oracle ?? ref, hyperliquidImpact(perp)),
+}
+
+export const keyOf = (market) => market.key ?? market.coin
+
 /**
- * @param {object} pair      from matchPairs()
+ * @param {object} pair      a spot/perp pair from a venue's matcher
  * @param {object} ctx
- * @param {Map}    ctx.books    coin → book (already stitched with any coarse tail)
- * @param {Map}    ctx.history  perp coin → [{ time, rate }]
- * @param {object} ctx.settings { notional, hours, fundingBasis, basisMode, leverage }
- * @param {object} ctx.rates    accountRates()
- * @param {object} ctx.quotes   { aligned, stable } token sets for the fee model
+ * @param {Map}    ctx.books    market key → book (already stitched with any coarse tail)
+ * @param {Map}    ctx.history  perp key → [{ time, rate, premium }]
+ * @param {object} ctx.settings { notional, hours, fundingBasis, basisMode, leverage, fundingImpact }
+ * @param {object} ctx.fees     the venue's fee model: { taker(market), maker(market) }
+ * @param {object} ctx.funding  the venue's funding model: { params(perp), premiumShift(...) }
+ * @param {object} ctx.execute  per-leg order pricing { spot, perp } (core/execution.js);
+ *                              a leg without one is a market order
  */
-export function evaluatePair(pair, { books, history, settings, rates, quotes }) {
-  const spotBook = books.get(pair.spot.coin)
-  const perpBook = books.get(pair.perp.coin)
-  const rate = fundingRate(pair.perp, history?.get(pair.perp.coin), settings.fundingBasis)
+export function evaluatePair(pair, { books, history, settings, fees: feeModel = hyperliquidFees(), funding = HL_FUNDING, execute = {} }) {
+  const spotBook = books.get(keyOf(pair.spot))
+  const perpBook = books.get(keyOf(pair.perp))
+  const perpHistory = history?.get(keyOf(pair.perp))
+  const rate = fundingRate(pair.perp, perpHistory, settings.fundingBasis)
   const direction = directionFor(rate.value)
-  const fees = { spot: takerFeeBps(pair.spot, rates, quotes), perp: takerFeeBps(pair.perp, rates, quotes) }
+  const fees = { spot: feeModel.taker(pair.spot), perp: feeModel.taker(pair.perp) }
   const q = pair.quoteUsd ?? 1
   const perpMid = midPrice(perpBook) ?? pair.perp.mid ?? pair.perp.mark
   const perpRef = arrivalPrice(perpBook, pair.perp.oracle) ?? perpMid
@@ -85,18 +97,19 @@ export function evaluatePair(pair, { books, history, settings, rates, quotes }) 
   // Your perp order eats into the book the premium is read from. Through the funding
   // formula that lowers the rate you earn — only above the interest baseline — for as
   // long as the consumed liquidity stays missing (see persistence in core/funding.js).
-  const params = fundingParams(pair.perp)
-  const basePremium = premiumFor(pair.perp, history?.get(pair.perp.coin), rate)
+  const params = funding.params(pair.perp)
+  const basePremium = premiumFor(pair.perp, perpHistory, rate)
   const perpSide = PLANS[direction].perpEntry
   const impact = settings.fundingImpact ?? 'real'
   const rateAt = (trip) => {
     if (impact === 'off') return rate.value
-    const shift = premiumShift(perpBook, perpSide, trip.perpQty, pair.perp.oracle ?? perpRef, pair.perp)
+    // Only what takes liquidity moves the premium: a maker leg's filled share rests.
+    const shift = funding.premiumShift(perpBook, perpSide, takenQty(trip.legs.perpEntry), pair.perp, perpRef)
     const kept = persistence(trip.notional, pair.perp, impact)
     return fundingAtSize({ baseRate: rate.value, basePremium, shift: shift == null ? null : shift * kept, params })
   }
 
-  const common = { spotBook, perpBook, direction, spotFeeBps: fees.spot, perpFeeBps: fees.perp, spotRef, perpRef }
+  const common = { spotBook, perpBook, direction, spotFeeBps: fees.spot, perpFeeBps: fees.perp, spotRef, perpRef, spotExecute: execute.spot, perpExecute: execute.perp }
   const trip = roundTrip({ ...common, notional: settings.notional })
   const rateAtSize = rateAt(trip)
   const econ = carryEconomics({

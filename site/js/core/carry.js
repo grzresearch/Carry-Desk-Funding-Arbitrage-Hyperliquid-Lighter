@@ -1,5 +1,6 @@
-// Carry economics of a delta-neutral spot/perp position: funding earned versus the
-// implementation shortfall paid to get in and out, and the size that maximises it.
+// Carry economics of a delta-neutral position (spot/perp or perp/perp): funding earned
+// versus the implementation shortfall paid to get in and out, and the size that
+// maximises it.
 
 import { roundTrip, capacity } from './shortfall.js'
 
@@ -28,16 +29,17 @@ export function basisBps(spotMid, perpMid, perpUnits = 1) {
  * basisMode 'converge' basis closes to zero by exit: the carry side pockets a perp
  *                      premium, the reverse side a perp discount
  *
- * Capital is the spot leg plus the perp margin at `leverage`.
+ * Capital is the spot leg plus the perp margin at `leverage` (override with
+ * `capitalPerNotional`, e.g. two perp margins for a perp/perp trade).
  */
-export function carryEconomics({ trip, hourlyRate, hours, basis = 0, basisMode = 'hold', leverage = 1 }) {
+export function carryEconomics({ trip, hourlyRate, hours, basis = 0, basisMode = 'hold', leverage = 1, capitalPerNotional = 1 + 1 / leverage }) {
   const { notional, costUsd, direction } = trip
   const rate = direction === 'carry' ? hourlyRate : -hourlyRate
   const fundingUsd = notional * rate * hours
   const captured = basisMode === 'converge' && basis != null ? (direction === 'carry' ? basis : -basis) : 0
   const basisUsd = (notional * captured) / 1e4
   const netUsd = fundingUsd + basisUsd - costUsd
-  const capital = notional * (1 + 1 / leverage)
+  const capital = notional * capitalPerNotional
   const annualise = HOURS_PER_YEAR / hours
   const hourlyIncome = notional * rate
   return {
@@ -72,15 +74,19 @@ export function logGrid(lo, hi, steps) {
  * horizon is concave in size. Trace it across the visible depth and report the size
  * that earns the most and the largest size that still earns anything.
  */
-export function sizeCurve({ spotBook, perpBook, direction, hourlyRate, rateAt, hours, spotFeeBps, perpFeeBps, spotRef, perpRef, basis, basisMode, leverage, minNotional = 50, steps = 56 }) {
-  const cap = capacity({ spotBook, perpBook, direction })
+export function sizeCurve({ tripAt, capacity: cap, hourlyRate, rateAt, hours, basis, basisMode, leverage, capitalPerNotional, minNotional = 50, steps = 56, ...spotPerp }) {
+  // Spot/perp callers may pass books instead of a trip function.
+  if (!tripAt) {
+    tripAt = (notional) => roundTrip({ ...spotPerp, notional })
+    cap = capacity(spotPerp)
+  }
   if (!(cap > minNotional)) return { capacity: cap, points: [], best: null, maxProfitable: null, depthLimited: false }
   // `rateAt(trip)` lets funding depend on size (your own order moves the premium).
   const netAt = (notional) => {
-    const trip = roundTrip({ spotBook, perpBook, notional, direction, spotFeeBps, perpFeeBps, spotRef, perpRef })
+    const trip = tripAt(notional)
     if (!trip?.complete) return null
     const rate = rateAt ? rateAt(trip) : hourlyRate
-    const econ = carryEconomics({ trip, hourlyRate: rate, hours, basis, basisMode, leverage })
+    const econ = carryEconomics({ trip, hourlyRate: rate, hours, basis, basisMode, leverage, capitalPerNotional })
     return { notional, netUsd: econ.netUsd, costBps: trip.costBps, netApr: econ.netApr, fundingApr: econ.fundingApr }
   }
   const points = []
@@ -101,7 +107,7 @@ export function sizeCurve({ spotBook, perpBook, direction, hourlyRate, rateAt, h
   if (next) {
     let lo = maxProfitable.notional
     let hi = next.notional
-    for (let k = 0; k < 30; k++) {
+    for (let k = 0; k < 20; k++) {
       const mid = Math.sqrt(lo * hi)
       if ((netAt(mid)?.netUsd ?? -1) > 0) lo = mid
       else hi = mid

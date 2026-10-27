@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { hourlyFunding, premiumIndex, premiumShift, fundingAtSize, fundingParams, afterOrder, persistence, FUNDING_CAP } from '../site/js/core/funding.js'
+import { hourlyFunding, premiumIndex, premiumShift, fundingAtSize, fundingParams, hyperliquidImpact, afterOrder, persistence, FUNDING_CAP } from '../site/js/core/funding.js'
 
 const near = (a, b, eps = 1e-12) => assert.ok(Math.abs(a - b) < eps, `${a} ≉ ${b}`)
 const MAIN = fundingParams({ dex: '' })
@@ -22,6 +22,17 @@ test('HIP-3 applies multiplier and its own clamp; funding is capped at 4 %/h', (
 })
 
 // Live check 2026-10-26: these books reproduce ctx.premium exactly.
+test('Lighter: multiplier scales premium and clamp, not the interest rate; big clamp caps', () => {
+  // Docs example: crypto market (m = 1), premium 0,1 % → 0,05 % per 8 h → 0,00625 %/h.
+  const crypto = { m: 1, I: 0.0001, c: 0.0005, scaleInterest: false, cap: 0.04 / 8 }
+  near(hourlyFunding(0.001, crypto), 0.0000625)
+  // RWA (m = ½): inside the band the full interest rate is paid, not half of it.
+  const rwa = { ...crypto, m: 0.5, I: 0.000032 }
+  near(hourlyFunding(0.0002, rwa), 0.000032 / 8)
+  near(hourlyFunding(0.002, rwa), (0.5 * 0.002 - 0.5 * 0.0005) / 8)
+  near(hourlyFunding(1, crypto), 0.04 / 8)
+})
+
 test('premium index follows the exchange formulas', () => {
   // HIP-3: mid of impact prices vs oracle (mkts:US500: −0.00014938)
   const hip3 = { bids: [{ px: 762.875, sz: 1000 }], asks: [{ px: 763.177, sz: 1000 }] }
@@ -39,7 +50,7 @@ test('afterOrder removes exactly the consumed liquidity', () => {
 
 test('a short into a thin book pushes the premium down; a deep book barely moves', () => {
   const thin = { bids: Array.from({ length: 20 }, (_, i) => ({ px: 1.01 - i * 0.01, sz: 2000 })), asks: [{ px: 1.02, sz: 1e6 }] }
-  const perp = { dex: 'para', symbol: 'X' }
+  const perp = hyperliquidImpact({ dex: 'para', symbol: 'X' })
   const shift = premiumShift(thin, 'sell', 20_000, 1, perp)
   assert.ok(shift < -0.03, `shift ${shift}`)
   const deep = { bids: [{ px: 1.01, sz: 1e9 }], asks: [{ px: 1.02, sz: 1e9 }] }

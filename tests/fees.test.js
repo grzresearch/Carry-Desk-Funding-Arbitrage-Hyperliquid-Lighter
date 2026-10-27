@@ -1,12 +1,19 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { accountRates, takerFeeBps, hip3Scale, hip3DeployerShare } from '../site/js/core/fees.js'
+import { accountRates, takerFeeBps, makerFeeBps, hip3Scale, hip3DeployerShare } from '../site/js/core/fees.js'
 
 const near = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `${a} ≉ ${b}`)
 const base = accountRates()
 
-test('base tier: 4.5 bps perp, 7 bps spot', () => {
-  assert.deepEqual(base, { perp: 4.5, spot: 7 })
+test('base tier: 4.5 bps perp, 7 bps spot taker; 1.5 / 4 bps maker', () => {
+  assert.deepEqual(base, { perp: 4.5, spot: 7, perpMaker: 1.5, spotMaker: 4 })
+})
+
+test('maker fees follow the same per-market scaling', () => {
+  near(makerFeeBps({ kind: 'perp', dex: '' }, base), 1.5)
+  near(makerFeeBps({ kind: 'perp', dex: 'xyz', feeScale: 1, growthMode: 'enabled' }, base), 0.3)
+  near(makerFeeBps({ kind: 'spot', base: { name: 'USDT0' }, quote: 'USDC' }, base, { stable: new Set(['USDC', 'USDT0']) }), 0.8)
+  assert.equal(makerFeeBps({ kind: 'perp', dex: '' }, accountRates({ tier: 4 })), 0)
 })
 
 test('volume tier and staking discount compound', () => {

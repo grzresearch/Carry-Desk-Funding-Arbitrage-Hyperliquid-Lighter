@@ -51,6 +51,11 @@ export function createClient({ fetchImpl = (...args) => globalThis.fetch(...args
     l2Book: (coin, { nSigFigs = null, priority = 3 } = {}) =>
       info(nSigFigs ? { type: 'l2Book', coin, nSigFigs } : { type: 'l2Book', coin }, { weight: 2, priority }),
     tokenDetails: (tokenId, { priority = 6 } = {}) => info({ type: 'tokenDetails', tokenId }, { priority }),
+    // Candles cost 20 plus 1 per 60 returned; reserve that up front like fundingHistory.
+    candleSnapshot: (coin, interval, startTime, { minutes = 1, priority = 9 } = {}) => {
+      const prepaid = Math.floor(Math.ceil((Date.now() - startTime) / (minutes * 60_000)) / 60)
+      return info({ type: 'candleSnapshot', req: { coin, interval, startTime, endTime: Date.now() } }, { weight: 20 + prepaid, priority, perItems: 60, prepaid })
+    },
     // One row per hour, at most 500 per call; reserve the per-20-rows weight up front.
     fundingHistory: (coin, startTime, { priority = 8 } = {}) => {
       const prepaid = Math.floor(Math.min(500, Math.ceil((Date.now() - startTime) / HOUR)) / 20)

@@ -44,30 +44,66 @@ export function sideDepth(levels) {
 }
 
 /**
+ * Cumulative size and notional of a side, computed once per levels array (books are
+ * replaced, never mutated), so every sweep of it is a binary search.
+ */
+const prefixes = new WeakMap()
+function prefix(levels) {
+  let p = prefixes.get(levels)
+  if (!p) {
+    const qty = new Float64Array(levels.length)
+    const notional = new Float64Array(levels.length)
+    let q = 0
+    let v = 0
+    levels.forEach(({ px, sz }, i) => {
+      q += sz
+      v += sz * px
+      qty[i] = q
+      notional[i] = v
+    })
+    p = { qty, notional }
+    prefixes.set(levels, p)
+  }
+  return p
+}
+
+/**
  * Sweep `qty` base units through `levels` like a market order would.
  * Returns the fill; `complete` is false when the visible book runs dry.
  */
 export function walk(levels, qty) {
-  let filled = 0
-  let notional = 0
-  let worstPx = null
-  let levelsUsed = 0
-  for (const { px, sz } of levels) {
-    if (filled >= qty) break
-    const take = Math.min(sz, qty - filled)
-    filled += take
-    notional += take * px
-    worstPx = px
-    levelsUsed++
+  const n = levels.length
+  if (!(qty > 0) || !n) return { qty, filled: 0, notional: 0, vwap: null, worstPx: null, levelsUsed: 0, complete: false }
+  const p = prefix(levels)
+  let filled
+  let notional
+  let last
+  if (p.qty[n - 1] <= qty) {
+    filled = p.qty[n - 1]
+    notional = p.notional[n - 1]
+    last = n - 1
+  } else {
+    // First level whose cumulative size covers the order.
+    let lo = 0
+    let hi = n - 1
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (p.qty[mid] >= qty) hi = mid
+      else lo = mid + 1
+    }
+    last = lo
+    const before = lo ? p.qty[lo - 1] : 0
+    filled = qty
+    notional = (lo ? p.notional[lo - 1] : 0) + (qty - before) * levels[lo].px
   }
   return {
     qty,
     filled,
     notional,
     vwap: filled > 0 ? notional / filled : null,
-    worstPx,
-    levelsUsed,
-    complete: qty > 0 && filled >= qty * (1 - 1e-9),
+    worstPx: levels[last].px,
+    levelsUsed: last + 1,
+    complete: filled >= qty * (1 - 1e-9),
   }
 }
 
