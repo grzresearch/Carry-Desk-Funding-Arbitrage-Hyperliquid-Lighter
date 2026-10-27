@@ -72,12 +72,16 @@ export function lighterFees({ ltAccount = 0 } = {}) {
   return { account, taker: () => account.taker, maker: () => account.maker }
 }
 
-function categoryOf(canonical, multiplier) {
+/** Base interest of crypto perps, 0.01 %/8h; real-world markets run below it. */
+const CRYPTO_INTEREST = 0.01 / 100
+
+function categoryOf(canonical, { m, I }) {
   const { underlying } = perpUnderlying({ symbol: canonical })
   if (COMMODITIES.has(underlying)) return 'commodity'
   if (FX.has(underlying) || /^(USD[A-Z]{3}|[A-Z]{3}USD)$/.test(canonical)) return 'fx'
-  // Real-world and pre-IPO markets run with a reduced premium multiplier.
-  if (multiplier < 1 || PROXY_CLASSES.some((c) => c.perps[underlying] != null)) return 'equity'
+  // Real-world and pre-IPO markets run with a reduced premium multiplier and interest;
+  // a new token can have the multiplier alone (XTEN, m = 0.01 at crypto interest).
+  if ((m < 1 && I < CRYPTO_INTEREST) || PROXY_CLASSES.some((c) => c.perps[underlying] != null)) return 'equity'
   return 'crypto'
 }
 
@@ -146,7 +150,7 @@ export function buildLighterUniverse(details, stream) {
       impactUsd: 500 / minImf,
       maxLeverage: Math.floor(1 / minImf),
       onlyIsolated: d.market_config?.market_margin_mode === 1,
-      category: categoryOf(canonical, params.m),
+      category: categoryOf(canonical, params),
       sizeDecimals: d.size_decimals,
     })
   }
@@ -179,7 +183,8 @@ const SPOT_TOLERANCE = { native: 0.1, 'tokenized-equity': 0.15, proxy: 0.03, fla
 
 /**
  * Join Lighter's spot markets with its perps. Same ticker first (ETH/USDC ⇄ ETH), then
- * Robinhood stock tokens (rhSPY ⇄ SPY), then proxy classes (XAUT ⇄ XAU, PAXG).
+ * Robinhood stock tokens (rhSPY ⇄ SPY), plus the proxy classes (XAUT ⇄ XAU, PAXG;
+ * rhSPY ⇄ US500).
  */
 export function matchLighter({ spot, perps }) {
   const bySymbol = new Map()
@@ -207,19 +212,20 @@ export function matchLighter({ spot, perps }) {
     const per = s.multiplier || 1
     const candidates = [{ underlying: name, kind: 'native', issuer: null }]
     if (/^rh[A-Z]/.test(name)) candidates.unshift({ underlying: name.slice(2), kind: 'tokenized-equity', issuer: 'Robinhood' })
-    let found = false
+    const paired = new Set()
     for (const cand of candidates) {
       for (const { perp, units } of bySymbol.get(cand.underlying) ?? []) {
         const deviation = price && perp.oracle ? (perp.oracle * per) / units / price - 1 : null
         if (deviation == null || Math.abs(deviation) > SPOT_TOLERANCE[cand.kind]) continue
         pairs.push(lighterPair(s, perp, { ...cand, units: units / per, deviation }))
-        found = true
+        paired.add(perp.key)
       }
-      if (found) break
+      if (paired.size) break
     }
-    if (found) continue
-    const cls = PROXY_CLASSES.find((c) => c.spot.includes(name))
+    // Index perps hedge the ETF token too (rhSPY ⇄ US500 at ×10.03), next to its own perp.
+    const cls = PROXY_CLASSES.find((c) => candidates.some((k) => c.spot.includes(k.underlying)))
     for (const { perp, units } of (cls && byClass.get(cls.key)) ?? []) {
+      if (paired.has(perp.key)) continue
       const deviation = price && perp.oracle ? (perp.oracle * per) / units / price - 1 : null
       if (deviation == null || Math.abs(deviation) > SPOT_TOLERANCE.proxy) continue
       pairs.push(lighterPair(s, perp, { underlying: cls.key, kind: 'proxy', issuer: null, units: units / per, deviation }))

@@ -68,7 +68,14 @@ test('roundTrip names the limiting leg when depth runs out', () => {
   assert.equal(trip.limiting, 'spotExit')
 })
 
-test('capacity is the thinnest side the plan crosses', () => {
+test('capacity is the thinnest side the plan crosses, in the base units the trip trades', () => {
   const thin = { bids: [{ px: 99, sz: 0.1 }], asks: [{ px: 101, sz: 50 }] }
-  near(capacity({ spotBook: thin, perpBook: book, direction: 'carry' }), 9.9)
+  // The trip sells notional ÷ mid: 0.1 units at a mid of 100 is $10, not the $9.90 they fetch.
+  const cap = capacity({ spotBook: thin, perpBook: book, direction: 'carry' })
+  near(cap, 10)
+  const at = (notional) => roundTrip({ spotBook: thin, perpBook: book, notional, direction: 'carry', spotFeeBps: 0, perpFeeBps: 0 })
+  assert.equal(at(cap).complete, true)
+  assert.equal(at(cap * 1.001).complete, false)
+  // A different arrival price moves the capacity with it.
+  near(capacity({ spotBook: thin, perpBook: book, direction: 'carry', spotRef: 99.5 }), 9.95)
 })

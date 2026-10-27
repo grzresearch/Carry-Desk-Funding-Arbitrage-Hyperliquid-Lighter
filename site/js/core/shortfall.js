@@ -113,11 +113,15 @@ export function hedgeTrip({ legs, notional }) {
 }
 
 /**
- * Largest notional the visible books can absorb for a full round trip: the thinnest of
- * the sides the trip has to cross, valued at each side's own prices.
+ * Largest notional the visible books can absorb for a full round trip. A leg trades
+ * notional ÷ arrival price in base units on both of its sides, so each side holds its
+ * resting size × that price; the thinnest side bounds the trip.
  */
 export function hedgeCapacity(legs) {
-  return Math.min(...legs.flatMap((l) => [sideDepth(sideOf(l.book, l.entry)).notional, sideDepth(sideOf(l.book, opposite(l.entry))).notional]))
+  return Math.min(...legs.flatMap((l) => {
+    const ref = l.ref ?? midPrice(l.book)
+    return [l.entry, opposite(l.entry)].map((side) => ref * sideDepth(sideOf(l.book, side)).qty)
+  }))
 }
 
 /** The spot/perp legs of a carry trade in `direction`. */
@@ -140,7 +144,7 @@ export function roundTrip({ notional, direction, ...rest }) {
   return { ...trip, direction, spotQty: trip.qty.spot, perpQty: trip.qty.perp }
 }
 
-/** Capacity of a spot/perp round trip. */
-export function capacity({ spotBook, perpBook, direction }) {
-  return hedgeCapacity(carryLegs({ spotBook, perpBook, direction }))
+/** Capacity of a spot/perp round trip; `spotRef`/`perpRef` as in roundTrip. */
+export function capacity({ spotBook, perpBook, direction, spotRef, perpRef }) {
+  return hedgeCapacity(carryLegs({ spotBook, perpBook, direction, spotRef, perpRef }))
 }

@@ -178,7 +178,19 @@ test('universe: units converted from percent, IMF and multiplier', () => {
   assert.equal(xau.fundingParams.m, 0.5)
   assert.equal(perps.find((p) => p.symbol === 'NVDA').category, 'equity')
   assert.equal(perps.find((p) => p.symbol === 'EURUSD').category, 'fx')
+  assert.equal(perps.find((p) => p.symbol === 'OPENAI').category, 'equity')
   assert.ok(spot.every((s) => s.quote === 'USDC' && s.key.startsWith('lt/')))
+})
+
+test('a token listed with a small premium multiplier stays crypto; reduced interest marks real-world assets', () => {
+  const eth = fixture.order_book_details.find((d) => d.symbol === 'ETH')
+  const details = { order_book_details: [
+    { ...eth, symbol: 'XTEN', market_id: 900, funding_premium_multiplier: 1 },
+    { ...eth, symbol: 'OURA', market_id: 901, funding_premium_multiplier: 1, base_interest_rate: '0.0032' },
+  ] }
+  const { perps } = buildLighterUniverse(details, null)
+  assert.equal(perps.find((p) => p.symbol === 'XTEN').category, 'crypto')
+  assert.equal(perps.find((p) => p.symbol === 'OURA').category, 'equity')
 })
 
 test('the funding formula reproduces the rates Lighter prints', () => {
@@ -227,6 +239,15 @@ test('spot ⇄ perp: same ticker, Robinhood stock tokens, gold proxies; LRTs exc
   assert.ok(Math.abs(spy.perpUnits - 1 / 1.001717991) < 1e-9)
   assert.equal(byId('XAUT/USDC', 'XAU').kind, 'proxy')
   assert.ok(byId('XAUT/USDC', 'PAXG'))
+  // ETF tokens hedge with the index perps too, per token and at the index scale.
+  const sp = byId('rhSPY/USDC', 'US500')
+  assert.equal(sp.kind, 'proxy')
+  assert.equal(sp.underlying, 'S&P 500')
+  near(sp.perpUnits, 10.03 / sp.spot.multiplier)
+  assert.ok(Math.abs(sp.deviation) < 0.03)
+  assert.equal(byId('rhQQQ/USDC', 'US100').kind, 'proxy')
+  assert.equal(byId('rhQQQ/USDC', 'QQQ').kind, 'tokenized-equity')
+  assert.equal(pairs.filter((p) => p.spot.coin === 'rhSPY/USDC').length, 2)
   assert.ok(unbacked.includes('weETH'))
   assert.ok(!pairs.some((p) => p.spot.base.name === 'weETH'))
 })

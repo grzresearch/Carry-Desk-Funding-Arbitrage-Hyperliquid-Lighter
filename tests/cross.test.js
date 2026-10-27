@@ -29,6 +29,13 @@ test('cross matching: same tickers, contract sizes, aliases, proxies; collisions
   assert.equal(find('xyz:QNT', 'QNT'), undefined)
 })
 
+test('a main-dex Hyperliquid perp is crypto whatever the other venue calls it', () => {
+  const [pair] = matchCross([hl('XTEN', 0.5)], [lt('XTEN', 0.5, { category: 'equity' })])
+  assert.equal(pair.category, 'crypto')
+  const [stock] = matchCross([hl('NVDA', 180, { dex: 'xyz' })], [lt('NVDA', 180, { category: 'equity' })])
+  assert.equal(stock.category, 'equity')
+})
+
 const book = (mid, half, step, n = 40, sz = 5) => ({
   bids: Array.from({ length: n }, (_, i) => ({ px: mid - half - step * i, sz })),
   asks: Array.from({ length: n }, (_, i) => ({ px: mid + half + step * i, sz })),

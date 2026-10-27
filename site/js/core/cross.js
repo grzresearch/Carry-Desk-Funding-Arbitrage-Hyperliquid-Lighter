@@ -34,6 +34,8 @@ const priceOf = (p) => p.oracle ?? p.mid ?? p.mark
 function categoryOf(key, a, b) {
   if (COMMODITIES.has(key)) return 'commodity'
   if (FX.has(key)) return 'fx'
+  // Hyperliquid's own dex lists crypto only; real-world assets live on HIP-3 dexes.
+  if (!a.dex) return 'crypto'
   if (b.category && b.category !== 'crypto') return b.category
   if (key === 'S&P 500' || key === 'Nasdaq-100' || a.growthMode === 'enabled') return 'equity'
   return 'crypto'
