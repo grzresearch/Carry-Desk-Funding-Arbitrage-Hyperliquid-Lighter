@@ -32,13 +32,14 @@ function joinKey(perp) {
 const priceOf = (p) => p.oracle ?? p.mid ?? p.mark
 
 function categoryOf(key, a, b) {
+  // Hyperliquid's own dex lists crypto (and gold tokens); real-world assets live on HIP-3
+  // dexes. A ticker alone says little there: GAS is the Neo token, not natural gas.
+  if (!a.dex) return key === 'Gold' ? 'commodity' : 'crypto'
+  // Lighter prices each market by its class (premium multiplier, interest): a clearer
+  // signal than tickers or growth mode, which HIP-3 dexes also grant crypto tokens (io:PRL).
+  if (b.category) return b.category
   if (COMMODITIES.has(key)) return 'commodity'
   if (FX.has(key)) return 'fx'
-  // Hyperliquid's own dex lists crypto only; real-world assets live on HIP-3 dexes.
-  if (!a.dex) return 'crypto'
-  // Lighter prices each market by its class (premium multiplier, interest): a clearer
-  // signal than growth mode, which HIP-3 dexes also grant crypto tokens (io:PRL).
-  if (b.category) return b.category
   if (key === 'S&P 500' || key === 'Nasdaq-100' || a.growthMode === 'enabled') return 'equity'
   return 'crypto'
 }

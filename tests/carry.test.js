@@ -63,6 +63,8 @@ test('logGrid spans its bounds', () => {
   near(g[0], 10)
   near(g[1], 100, 1e-9)
   near(g[2], 1000, 1e-9)
+  // Exactly, not exp(log(hi)): the curve must reach the capacity itself.
+  for (const hi of [250, 500, 1000, 2500, 250_000, 1e6]) assert.equal(logGrid(50, hi, 56).at(-1), hi)
 })
 
 test('sizeCurve finds an interior optimum when impact grows faster than funding', () => {
@@ -109,4 +111,15 @@ test('the curve reaches the true depth edge and always contains the chosen size'
   // 20 tokens at a mid of 100 is the most the asks can fill: $2 000.
   assert.ok(last > 1990 && last <= 2000, `last ${last}`)
   assert.ok(curve.points.some((p) => p.notional === 1500))
+})
+
+test('a chosen size at exactly the capacity, or below the grid start, is on the curve', () => {
+  // 10 units bid at a mid of 100: capacity is exactly $1 000.
+  const spotBook = { bids: [{ px: 99.9, sz: 10 }], asks: [{ px: 100.1, sz: 1000 }] }
+  const perpBook = { bids: [{ px: 99.9, sz: 1000 }], asks: [{ px: 100.1, sz: 1000 }] }
+  const at = (chosen) => sizeCurve({ spotBook, perpBook, direction: 'carry', spotFeeBps: 0, perpFeeBps: 0, hourlyRate: 0.001, hours: 720, leverage: 2, chosen })
+  const edge = at(1000)
+  assert.equal(edge.capacity, 1000)
+  assert.equal(edge.points.at(-1).notional, 1000)
+  assert.equal(at(30).points[0].notional, 30)
 })
