@@ -36,6 +36,14 @@ test('a main-dex Hyperliquid perp is crypto whatever the other venue calls it', 
   assert.equal(stock.category, 'equity')
 })
 
+test('growth mode does not make a HIP-3 token a stock when Lighter prices it as crypto', () => {
+  const [token] = matchCross([hl('PRL', 1.76, { dex: 'io', growthMode: 'enabled' })], [lt('PRL', 1.76, { category: 'crypto' })])
+  assert.equal(token.category, 'crypto')
+  // Without Lighter's class, growth mode still hints at a real-world asset.
+  const [unknown] = matchCross([hl('NBIS', 90, { dex: 'io', growthMode: 'enabled' })], [lt('NBIS', 90)])
+  assert.equal(unknown.category, 'equity')
+})
+
 const book = (mid, half, step, n = 40, sz = 5) => ({
   bids: Array.from({ length: n }, (_, i) => ({ px: mid - half - step * i, sz })),
   asks: Array.from({ length: n }, (_, i) => ({ px: mid + half + step * i, sz })),

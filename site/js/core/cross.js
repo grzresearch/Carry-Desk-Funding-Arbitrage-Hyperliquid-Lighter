@@ -36,7 +36,9 @@ function categoryOf(key, a, b) {
   if (FX.has(key)) return 'fx'
   // Hyperliquid's own dex lists crypto only; real-world assets live on HIP-3 dexes.
   if (!a.dex) return 'crypto'
-  if (b.category && b.category !== 'crypto') return b.category
+  // Lighter prices each market by its class (premium multiplier, interest): a clearer
+  // signal than growth mode, which HIP-3 dexes also grant crypto tokens (io:PRL).
+  if (b.category) return b.category
   if (key === 'S&P 500' || key === 'Nasdaq-100' || a.growthMode === 'enabled') return 'equity'
   return 'crypto'
 }
