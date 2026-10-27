@@ -33,7 +33,7 @@ const LEVERAGES = [1, 2, 3, 5, 10]
 export const VIEWS = {
   hl: { name: 'Hyperliquid', sub: 'Spot ⇄ Perp', venues: ['hl'], legs: ['Spot', 'Perp'] },
   lt: { name: 'Lighter', sub: 'Spot ⇄ Perp', venues: ['lt'], legs: ['Spot', 'Perp'] },
-  x: { name: 'Cross-DEX', sub: 'HL ⇄ Lighter Perps', venues: ['hl', 'lt'], legs: ['HL', 'Lighter'], cross: true },
+  x: { name: 'Cross-DEX', sub: 'Perp ⇄ Perp', venues: ['hl', 'lt'], legs: ['HL', 'Lighter'], cross: true },
 }
 
 const EXECUTIONS = (view) => [['taker', 'Taker'], ['makerA', `Maker ${view.legs[0]}`], ['makerB', `Maker ${view.legs[1]}`], ['maker', 'Maker beide']]
@@ -172,19 +172,16 @@ function segmented(el, options, value, onPick) {
     }, label)))
 }
 
+/** Tabs are built once and then updated in place, so keyboard focus survives renders. */
 function renderTabs() {
   const ids = Object.keys(VIEWS)
-  mount($('tabs'), ids.map((id) => {
-    const v = VIEWS[id]
-    const selected = id === settings.view
-    const n = pairsOf(id).length
-    return h('button', {
+  const list = $('tabs')
+  if (!list.children.length) {
+    mount(list, ids.map((id) => h('button', {
       type: 'button',
       role: 'tab',
       id: `tab-${id}`,
-      'aria-selected': String(selected),
       'aria-controls': 'board',
-      tabindex: selected ? 0 : -1,
       onclick: () => pickView(id),
       onkeydown: (e) => {
         const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0
@@ -192,12 +189,22 @@ function renderTabs() {
         e.preventDefault()
         const next = ids[(ids.indexOf(settings.view) + step + ids.length) % ids.length]
         pickView(next)
-        requestAnimationFrame(() => $(`tab-${next}`)?.focus())
+        $(`tab-${next}`).focus()
       },
     },
-    h('span', { class: 'tab-name' }, v.name),
-    h('span', { class: 'tab-sub' }, v.sub, n ? h('span', { class: 'tab-count' }, String(n)) : null))
-  }))
+    h('span', { class: 'tab-name' }, VIEWS[id].name),
+    h('span', { class: 'tab-sub' }, VIEWS[id].sub, h('span', { class: 'tab-count' })))))
+  }
+  for (const id of ids) {
+    const tab = $(`tab-${id}`)
+    const selected = id === settings.view
+    tab.setAttribute('aria-selected', String(selected))
+    tab.tabIndex = selected ? 0 : -1
+    const n = pairsOf(id).length
+    const badge = tab.querySelector('.tab-count')
+    badge.textContent = n ? String(n) : ''
+    badge.hidden = !n
+  }
 }
 
 function pickView(id) {
@@ -223,7 +230,7 @@ function feeSummary(v) {
   const lt = LIGHTER_ACCOUNTS[settings.ltAccount]
   const ltText = lt.taker ? `Lighter ${fmt.bps(lt.taker, { digits: 2 })} bps` : 'Lighter 0 bps'
   if (v.cross) return `HL ${fmt.bps(rates.perp, { digits: 2 })} · ${ltText}`
-  if (settings.view === 'lt') return `${lt.name.split(' ·')[0]} · ${fmt.bps(lt.taker, { digits: 2 })} / ${fmt.bps(lt.maker, { digits: 2 })} bps`
+  if (settings.view === 'lt') return `${lt.name.split(' ·')[0]} · Maker ${fmt.bps(lt.maker, { digits: 2 })} / Taker ${fmt.bps(lt.taker, { digits: 2 })} bps`
   return `Spot ${fmt.bps(rates.spot, { digits: 2 })} · Perp ${fmt.bps(rates.perp, { digits: 2 })} bps`
 }
 
@@ -531,9 +538,9 @@ function requestData(visible) {
     venue.wantDepth(thin[id], settings.notional)
     // Net still rises at the edge of the visible levels: fetch the tail whatever the size.
     venue.wantDepth(limited[id], Infinity)
-    if (venue.updatedAt) venue.wantHistory(perps[id])
-    // Maker numbers rest on candles for every row, so they queue ahead of history.
-    if (makers[id].length) venue.wantCandles(makers[id], 7)
+    // History decides the funding basis of every row, so it goes ahead of maker candles.
+    if (venue.updatedAt) venue.wantHistory(perps[id], 7)
+    if (makers[id].length) venue.wantCandles(makers[id], 8)
   }
 }
 
@@ -574,7 +581,7 @@ function renderStatus() {
   const next = Math.max(0, Math.round((nextRefreshAt - Date.now()) / 1000))
   // Sampled books arrive over the first minutes: show how far that got.
   const sampling = list.find((d) => d.streaming && [...d.wanted].some((k) => !d.books.has(k)))
-  const progress = sampling ? ` · ${sampling.adapter.name}-Bücher ${[...sampling.wanted].filter((k) => sampling.books.has(k)).length}/${sampling.wanted.size}` : ''
+  const progress = sampling ? ` · ${sampling.adapter.short}-Bücher ${[...sampling.wanted].filter((k) => sampling.books.has(k)).length}/${sampling.wanted.size}` : ''
   $('live-text').textContent = `${error ? 'Letzter Stand' : 'Live'} · ${fmt.timeOfDay(updated)} · Update in ${next} s${progress}`
 }
 

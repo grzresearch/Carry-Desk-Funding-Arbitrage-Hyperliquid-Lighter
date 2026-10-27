@@ -33,21 +33,38 @@ export function spreadHistory(histA, histB, short) {
   return out
 }
 
+/**
+ * Who pays whom on one leg: at a positive rate longs pay and shorts receive, at a
+ * negative rate the other way round.
+ */
+export function fundingFlow(short, rate) {
+  const receives = short ? rate >= 0 : rate < 0
+  return { receives, verb: receives ? 'erhält' : 'zahlt' }
+}
+
+const SOURCE = (rate) => (rate.fallback ? 'aktuell, Historie lädt' : FUNDING_SOURCE[rate.source])
+
 function legOf(r, key, venue, perp) {
   const rate = r.rates[key]
-  const role = r.short === key ? 'Short' : 'Long'
+  const short = r.short === key
+  const flow = fundingFlow(short, rate.value)
   const rows = [
     key === 'a' ? ['Dex', `${dexLabel(perp)}${perp.growthMode === 'enabled' ? ' · Growth Mode' : ''}`] : ['Markt', `Lighter · ${perp.symbol} (#${perp.marketId})`],
-    ['Rolle', `${role} · ${role === 'Short' ? 'erhält' : 'zahlt'} Funding`],
+    ['Rolle', `${short ? 'Short' : 'Long'} · ${flow.verb} ${fmt.pct(Math.abs(rate.value) * 8760)} p.a.`],
     ['Mid / Oracle', `${fmt.price(key === 'a' ? r.spotMid : r.perpMid)} / ${fmt.price(perp.oracle)}`],
     ['Funding jetzt', `${fmt.rate(perp.funding)} /h · ${fmt.pct(perp.funding * 8760, { sign: true })} p.a.`],
-    ['Funding geplant', `${fmt.pct(rate.value * 8760, { sign: true })} p.a. · ${rate.fallback ? 'aktuell (Historie lädt)' : FUNDING_SOURCE[rate.source]}`],
+    ['Funding geplant', `${fmt.pct(rate.value * 8760, { sign: true })} p.a. · ${SOURCE(rate)}`],
     ['Spread', r.spread[key] == null ? '–' : `${fmt.bps(r.spread[key])} bps`],
     ['Open Interest', `${fmt.usd(perp.openInterestUsd)}${perp.oiCap ? ` von ${fmt.usd(perp.oiCap)}` : ''}`],
     ['Max. Hebel · Margin', `${perp.maxLeverage}× · ${perp.onlyIsolated ? 'isoliert' : 'cross'} · ${perp.collateral}`],
     ['Taker-Gebühr', `${fmt.bps(r.fees[key], { digits: 2 })} bps`],
   ]
   return legCard(`${VENUE[key]} · ${perp.coin}`, key, rows, tradeLink(venue, perp))
+}
+
+/** "Short auf Lighter erhält 12,3 % p.a. (Ø 7 T)" — the verb follows the sign. */
+function legSentence(role, venueName, rate, short) {
+  return `${role} auf ${venueName} ${fundingFlow(short, rate.value).verb} ${fmt.pct(Math.abs(rate.value) * 8760)} p.a. (${SOURCE(rate)})`
 }
 
 function risks(r, settings, spread) {
@@ -129,7 +146,7 @@ export function renderCrossDetail(el, r, settings, { a, b }) {
 
   const moved = r.atSize && settings.fundingImpact !== 'off' && Math.abs(r.atSize.apr - r.fundingApr) >= 0.0005
   blocks.push(section('Woher der Ertrag kommt',
-    `Short auf ${shortName} erhält ${fmt.pct(r.rates[r.short].value * 8760, { sign: true })}, Long auf ${longName} zahlt ${fmt.pct(r.rates[r.short === 'a' ? 'b' : 'a'].value * 8760, { sign: true })} p.a. (${r.rate.fallback ? 'aktuell, Historie lädt' : FUNDING_SOURCE[r.rate.source]}): ${fmt.pct(r.fundingApr, { sign: true })} Spread über ${fmt.duration(settings.hours)} gegen die Kosten von vier Orders zu je ${fmt.usd(settings.notional)}.${moved ? ` Deine Orders verschieben die Premium auf beiden Börsen: wir rechnen mit ${fmt.pct(r.atSize.apr, { sign: true })} p.a.` : ''}${settings.basisMode === 'converge' && r.basis != null ? ' Basis-Szenario: die Preisdifferenz schließt sich bis zum Exit.' : ''}`,
+    `${legSentence('Short', shortName, r.rates[r.short], true)}, ${legSentence('Long', longName, r.rates[r.short === 'a' ? 'b' : 'a'], false)}: ${fmt.pct(r.fundingApr, { sign: true })} Spread über ${fmt.duration(settings.hours)} gegen die Kosten von vier Orders zu je ${fmt.usd(settings.notional)}.${moved ? ` Deine Orders verschieben die Premium auf beiden Börsen: wir rechnen mit ${fmt.pct(r.atSize.apr, { sign: true })} p.a.` : ''}${settings.basisMode === 'converge' && r.basis != null ? ' Basis-Szenario: die Preisdifferenz schließt sich bis zum Exit.' : ''}`,
     econ ? waterfall(r) : h('p', { class: 'card' }, 'Die sichtbare Tiefe reicht für diese Größe nicht – Netto nicht berechenbar.')))
 
   blocks.push(section('Implementation Shortfall je Leg',

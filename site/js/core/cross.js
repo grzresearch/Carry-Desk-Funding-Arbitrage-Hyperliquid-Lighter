@@ -90,8 +90,14 @@ export function evaluateCross(pair, { a: ctxA, b: ctxB, settings }) {
   const bookB = ctxB.books.get(keyOf(pair.b))
   const histA = ctxA.history?.get(keyOf(pair.a))
   const histB = ctxB.history?.get(keyOf(pair.b))
-  const rateA = fundingRate(pair.a, histA, settings.fundingBasis)
-  const rateB = fundingRate(pair.b, histB, settings.fundingBasis)
+  // One basis for both legs: while either venue's history is still loading, both use the
+  // current rate — one leg's now against the other's week matches no assumption.
+  let rateA = fundingRate(pair.a, histA, settings.fundingBasis)
+  let rateB = fundingRate(pair.b, histB, settings.fundingBasis)
+  if (rateA.fallback !== rateB.fallback) {
+    rateA = { ...fundingRate(pair.a, histA, 'now'), fallback: true }
+    rateB = { ...fundingRate(pair.b, histB, 'now'), fallback: true }
+  }
   // Longs pay shorts at a positive rate: short where it is higher, long where it is lower.
   const short = rateA.value >= rateB.value ? 'a' : 'b'
   const earned = Math.abs(rateA.value - rateB.value)
@@ -151,7 +157,7 @@ export function evaluateCross(pair, { a: ctxA, b: ctxB, settings }) {
   const trip = tripAt(settings.notional)
   const rateAtSize = rateAt(trip)
   const econ = carryEconomics({ trip, hourlyRate: rateAtSize, ...common })
-  const curve = sizeCurve({ tripAt, capacity: hedgeCapacity(legs), rateAt, ...common })
+  const curve = sizeCurve({ tripAt, capacity: hedgeCapacity(legs), rateAt, chosen: settings.notional, ...common })
   const atSize = { rate: rateAtSize, apr: rateAtSize * HOURS_PER_YEAR }
   if (!trip.complete) return { ...base, trip, econ: null, curve, atSize, status: 'thin' }
   return { ...base, trip, econ, curve, atSize, status: econ.netUsd > 0 ? 'profit' : 'loss' }

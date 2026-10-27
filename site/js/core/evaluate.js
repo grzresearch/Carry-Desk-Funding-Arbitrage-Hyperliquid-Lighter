@@ -122,6 +122,7 @@ export function evaluatePair(pair, { books, history, settings, fees: feeModel = 
   })
   const curve = sizeCurve({
     ...common,
+    chosen: settings.notional,
     rateAt,
     hours: settings.hours,
     basis,

@@ -57,6 +57,17 @@ test('adverse selection includes the price running on after a fill', () => {
   near(leg.cost.adverse / leg.arrival, (m + psi) * leg.maker.filledShare, 1e-9)
 })
 
+test('volume survival is read off the candles: a market that trades every minute always clears small sizes', () => {
+  // $2 000 a minute traded, $1 000 per side: every 5-minute window holds $5 000.
+  const v = sideVolume(minutes(600, () => ({ close: 1, notional: 2000 })))
+  assert.equal(v.survival(100, 300), 1)
+  assert.equal(v.survival(5000, 300), 1)
+  assert.equal(v.survival(5001, 300), 0)
+  // Half the minutes idle: only the idle windows carry zero mass.
+  const sparse = sideVolume(minutes(600, (i) => ({ close: 1, notional: i % 2 ? 2000 : 0 })))
+  near(sparse.survival(500, 60), 299 / 600, 0.01)
+})
+
 test('activity needs half an hour of candles; the fallback is flagged', () => {
   assert.equal(activityFrom(minutes(10, () => ({ close: 1, notional: 1 }))), null)
   // The median hour runs at ~0.6 of the 24 h mean.

@@ -18,9 +18,9 @@
 //      principle the walk gets there within T with probability
 //          P_price(u) = erfc(m / (σ √(2T)))
 //  (2) volume — the side's marketable volume during T is at least u (our own size: the
-//      queue ahead mostly cancels when the price moves, so it need not trade). From a
-//      zero-inflated Gamma fitted on the market's 1-minute candles: thin markets spend
-//      most minutes without a trade at all.
+//      queue ahead mostly cancels when the price moves, so it need not trade). Read off
+//      the market's own 1-minute candles: the share of windows of that length that
+//      traded at least that much (thin markets spend most minutes without a trade).
 // Taken as independent, P(u) = P_price(u) · P_vol(u), made non-increasing in u (FIFO).
 // Independence keeps the adverse-selection identity exact: given a fill, the price has
 // on average moved m(u) against the order by T (optional stopping) — so
@@ -32,12 +32,14 @@
 // The tape shows the price does not stop at a fill: it keeps going for a few seconds
 // (BTC −0.8 bps 5–10 s after a level is emptied). That continuation, ψ = 0.25·σ·√10 s
 // per filled unit, is added to the adverse selection; it does not change who fills.
-// Y = 0.35 (fits ranged 0.25–0.5) and the volume condition were fitted and checked on a
-// queue-position backtest — resting orders replayed against recorded Hyperliquid books
-// and trades — and on 24 h candle replays (BTC, SOL, LINK, thin HIP-3 and spot markets,
-// Lighter BTC and LINK), matching realised fill rates and adverse selection. It is a
-// closed form of Cont & Kukanov's limit/market split with the adverse selection of
-// Moallemi & Yuan made explicit; static order, no re-pegging.
+// Calibration: resting orders replayed against recorded Hyperliquid books and trades
+// (BTC, SOL, LINK, AVAX, LTC, FIL, EIGEN, thin HIP-3 and spot markets; 63k placements,
+// waits of 1, 5 and 15 min). Y = 0.35 minimises the cost bias (the data pin it only to
+// 0.25–0.5); the empirical volume curve was checked out of sample on 59 hours × 10
+// markets (mean calibration error 0.016). What the model cannot know is how busy the
+// next minutes will be: realised flow ran 0.1–3× the estimate, and fill shares follow it.
+// It is a closed form of Cont & Kukanov's limit/market split with the adverse selection
+// of Moallemi & Yuan made explicit; static order, no re-pegging.
 
 import { legShortfall } from './shortfall.js'
 
@@ -128,12 +130,15 @@ export function hitProb(m, sigma, T) {
   return erfc(m / (s * Math.SQRT2))
 }
 
-/** σ per √s from 1-minute closes, over 5-minute steps (damps the bid/ask bounce). */
+/**
+ * σ per √s from 1-minute closes, over 5-minute steps (damps the bid/ask bounce). Every
+ * overlapping step counts, so σ does not jump with the minute the window starts on.
+ */
 export function sigmaFromCandles(candles, step = 5) {
   const closes = candles.map((c) => c.close).filter((x) => x > 0)
   let ss = 0
   let n = 0
-  for (let i = step; i < closes.length; i += step) {
+  for (let i = step; i < closes.length; i++) {
     const r = Math.log(closes[i] / closes[i - step])
     ss += r * r
     n++
@@ -143,11 +148,13 @@ export function sigmaFromCandles(candles, step = 5) {
 
 /**
  * Marketable volume on one side, from 1-minute candles [{ time, notional }]: half of
- * each minute's notional. For windows of 1, 2, 5, 15 and 60 minutes a zero-inflated
- * Gamma is fitted by moments on rolling sums (minutes without candles count as zero);
- * `survival(usd, sec)` = P(volume over `sec` ≥ `usd`), interpolated in log time.
- * The flow λ is the median of the rolling hours — robust to the bursts that will not be
- * there while you wait, and what Y was calibrated against.
+ * each minute's notional. For windows of 1, 2, 5, 15 and 60 minutes the rolling sums
+ * (minutes without candles count as zero) are kept sorted, and `survival(usd, sec)` =
+ * P(volume over `sec` ≥ `usd`) is the share of windows that held at least `usd`,
+ * interpolated in log time. Idle windows are the only mass at zero — a fitted curve
+ * would put more there than the candles show. The flow λ is the median rolling hour:
+ * robust to the bursts that will not be there while you wait, and what Y was fitted
+ * against.
  */
 export function sideVolume(candles) {
   if (!candles?.length) return { flowUsd: 0, survival: () => 0 }
@@ -155,44 +162,46 @@ export function sideVolume(candles) {
   const last = Math.floor(candles[candles.length - 1].time / 60_000)
   const minutes = new Float64Array(last - first + 1)
   for (const c of candles) minutes[Math.floor(c.time / 60_000) - first] += (c.notional || 0) / 2
-  const fits = [1, 2, 5, 15, 60].filter((n) => n <= minutes.length).map((n) => {
-    let sum = 0
-    for (let i = 0; i < n; i++) sum += minutes[i]
-    let windows = 0
-    let busy = 0
-    let s1 = 0
-    let s2 = 0
-    for (let i = n; ; i++) {
-      windows++
-      if (sum > 1e-9) {
-        busy++
-        s1 += sum
-        s2 += sum * sum
-      }
-      if (i >= minutes.length) break
-      sum += minutes[i] - minutes[i - n]
+  const windows = [1, 2, 5, 15, 60].filter((n) => n <= minutes.length).map((n) => {
+    const count = minutes.length - n + 1
+    const busy = []
+    for (let i = 0; i < count; i++) {
+      // Summed afresh, not as a running sum: an idle window must come out exactly zero.
+      let sum = 0
+      for (let j = i; j < i + n; j++) sum += minutes[j]
+      if (sum > 0) busy.push(sum)
     }
-    const mean = busy ? s1 / busy : 0
-    const variance = busy > 1 ? Math.max(s2 / busy - mean * mean, 1e-12) : mean * mean
-    const k = Math.min(50, Math.max(0.05, (mean * mean) / variance))
-    return { sec: n * 60, p: busy / windows, k, theta: mean / k }
+    busy.sort((a, b) => a - b)
+    return { sec: n * 60, p: busy.length / count, busy }
   })
-  const at = (f, usd) => (f.p > 0 && f.theta > 0 ? f.p * gammaQ(f.k, usd / f.theta) : 0)
+  // Share of the busy windows that held at least `usd` (binary search on the sorted sums).
+  const share = (w, usd) => {
+    const sums = w.busy
+    let lo = 0
+    let hi = sums.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (sums[mid] < usd) lo = mid + 1
+      else hi = mid
+    }
+    return sums.length ? (sums.length - lo) / sums.length : 0
+  }
+  const at = (w, usd) => w.p * share(w, usd)
   const survival = (usd, sec) => {
     if (!(usd > 0)) return 1
-    const f0 = fits[0]
-    if (sec <= f0.sec) {
+    const w0 = windows[0]
+    if (sec <= w0.sec) {
       // Under a minute fewer windows carry a trade; a busy one looks like a busy minute.
-      return (1 - (1 - f0.p) ** (sec / f0.sec)) * (f0.theta > 0 ? gammaQ(f0.k, usd / f0.theta) : 0)
+      return (1 - (1 - w0.p) ** (sec / w0.sec)) * share(w0, usd)
     }
-    for (let i = 1; i < fits.length; i++) {
-      if (sec <= fits[i].sec) {
-        const x = Math.log(sec / fits[i - 1].sec) / Math.log(fits[i].sec / fits[i - 1].sec)
-        return (1 - x) * at(fits[i - 1], usd) + x * at(fits[i], usd)
+    for (let i = 1; i < windows.length; i++) {
+      if (sec <= windows[i].sec) {
+        const x = Math.log(sec / windows[i - 1].sec) / Math.log(windows[i].sec / windows[i - 1].sec)
+        return (1 - x) * at(windows[i - 1], usd) + x * at(windows[i], usd)
       }
     }
-    const f = fits[fits.length - 1] // beyond the longest window: scale its mean with time
-    return at(f, (usd * f.sec) / sec)
+    const w = windows[windows.length - 1] // beyond the longest window: scale its sums with time
+    return at(w, (usd * w.sec) / sec)
   }
   const hours = []
   let run = 0

@@ -91,8 +91,8 @@ function assetCell(r) {
 /** Funding column: the carry's rate, or for a cross pair the spread and both rates. */
 function fundingCell(r, settings) {
   const sub = r.type === 'cross'
-    ? h('div', { class: 'cell-sub', title: `Hyperliquid ${fmt.rate(r.rates.a.value)}/h · Lighter ${fmt.rate(r.rates.b.value)}/h` },
-        `HL ${fmt.pct(r.rates.a.value * 8760, { sign: true, digits: 1 })} · LT ${fmt.pct(r.rates.b.value * 8760, { sign: true, digits: 1 })}${r.rate.fallback ? '*' : ''}`)
+    ? h('div', { class: 'cell-sub', title: `Hyperliquid ${fmt.rate(r.rates.a.value)}/h · Lighter ${fmt.rate(r.rates.b.value)}/h${r.rate.fallback ? ' · * aktuell, Historie lädt noch' : ''}` },
+        `HL ${fmt.pct(r.rates.a.value * 8760, { sign: true, digits: 1 })}${r.rates.a.fallback ? '*' : ''} · LT ${fmt.pct(r.rates.b.value * 8760, { sign: true, digits: 1 })}${r.rates.b.fallback ? '*' : ''}`)
     : h('div', { class: 'cell-sub', title: r.rate.fallback ? 'Historie lädt noch – bis dahin gilt die aktuelle Rate' : null }, `${fmt.rate(r.rate.value)}/h · ${r.rate.fallback ? 'aktuell*' : FUNDING_SOURCE[r.rate.source]}`)
   return h('td', { class: 'num', 'data-label': r.type === 'cross' ? 'Funding-Spread' : 'Funding p.a.' },
     h('div', { class: 'cell-main' }, fmt.pct(r.fundingApr, { sign: true })),
@@ -209,6 +209,10 @@ const count = (n, one, many) => `${n} ${n === 1 ? one : many}`
 export function renderTiles(el, rows, unbacked, settings, onOpen, loading, view = { name: 'Hyperliquid' }) {
   const wait = '…'
   const priced = rows.filter((r) => r.econ)
+  // Books of a freshly opened tab are still coming in: no verdicts on rows not yet seen.
+  const pending = rows.filter((r) => r.status === 'loading').length
+  loading ||= pending > 0 && !priced.length
+  const stillLoading = pending ? ` · ${pending} laden noch` : ''
   const profitable = priced.filter((r) => r.status === 'profit')
   const best = profitable.reduce((a, r) => (!a || r.econ.netUsd > a.econ.netUsd ? r : a), null)
   const underlyings = new Set(rows.map((r) => r.pair.key)).size
@@ -234,8 +238,9 @@ export function renderTiles(el, rows, unbacked, settings, onOpen, loading, view 
     const eqx = equities.filter((r) => r.pair.issuer === 'EQX')
     const eqxTwo = eqx.filter((r) => r.status !== 'nobook' && r.status !== 'loading')
     const eqxOne = eqx.filter((r) => r.status === 'nobook' && r.oneSided)
+    const eqxPending = eqx.filter((r) => r.status === 'loading').length
     fourth = tile('Tokenisierte Aktien', loading && !rows.length ? wait : count(equities.length, 'Paar', 'Paare'),
-      eqx.length ? `EQX: ${count(eqx.length, 'Paar', 'Paare')}, ${eqxTwo.length} handelbar${eqxOne.length ? `, ${eqxOne.length} einseitig` : ''}` : 'EQX, xStocks und weitere')
+      eqx.length ? `EQX: ${count(eqx.length, 'Paar', 'Paare')}, ${eqxPending ? `${eqxPending} laden` : `${eqxTwo.length} handelbar`}${eqxOne.length ? `, ${eqxOne.length} einseitig` : ''}` : 'EQX, xStocks und weitere')
   } else {
     const live = rows.filter((r) => r.status !== 'nobook' && r.status !== 'loading' && r.status !== 'mismatch')
     const top = live.reduce((a, r) => (!a || Math.abs(r.fundingApr) > Math.abs(a.fundingApr) ? r : a), null)
@@ -246,7 +251,7 @@ export function renderTiles(el, rows, unbacked, settings, onOpen, loading, view 
   mount(el,
     countTile,
     tile(`Lohnt sich bei ${fmt.usd(settings.notional)}`, loading ? wait : `${profitable.length} von ${priced.length}`,
-      loading ? 'Orderbücher laden …' : rows.length && !priced.length ? noBooks : `über ${fmt.duration(settings.hours)} inkl. Ein- und Ausstieg`),
+      loading ? 'Orderbücher laden …' : rows.length && !priced.length ? noBooks : `über ${fmt.duration(settings.hours)} inkl. Ein- und Ausstieg${stillLoading}`),
     best
       ? tile('Bestes Netto', fmt.usd(best.econ.netUsd, { sign: true }), `${legs(best)} · ${fmt.pct(best.econ.netApr)} p.a.`, { onClick: () => onOpen(best.pair.id) })
       : tile('Bestes Netto', loading ? wait : '–', loading ? 'Orderbücher laden …' : priced.length ? 'keine profitable Position bei dieser Größe' : rows.length ? noBooks : 'keine Paare für diese Filter'),

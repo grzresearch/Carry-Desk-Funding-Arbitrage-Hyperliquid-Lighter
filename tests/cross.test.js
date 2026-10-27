@@ -103,3 +103,23 @@ test('spread history lines up both venues by hour and signs it for the chosen si
   near(s[1].rate, -0.0001)
   assert.equal(spreadHistory(a, null, 'a'), null)
 })
+
+test('who pays: shorts receive a positive rate and pay a negative one, longs the reverse', async () => {
+  const { fundingFlow } = await import('../site/js/ui/cross-detail.js')
+  assert.equal(fundingFlow(true, 0.0001).verb, 'erhält')
+  assert.equal(fundingFlow(true, -0.0001).verb, 'zahlt')
+  assert.equal(fundingFlow(false, 0.0001).verb, 'zahlt')
+  assert.equal(fundingFlow(false, -0.0001).verb, 'erhält')
+})
+
+test('one funding basis for both legs while either history is still loading', () => {
+  const { pair, settings, a, b } = ctxs(0.0001, 0.00002, { a: book(2000, 0.05, 0.1), b: book(2000, 0.05, 0.1) })
+  const H = 3_600_000
+  // Lighter has a week of −0,01 %/h; Hyperliquid's history has not arrived yet.
+  b.history.set(pair.b.key, Array.from({ length: 168 }, (_, i) => ({ time: i * H, rate: -0.0001 })))
+  const r = evaluateCross(pair, { a, b, settings: { ...settings, fundingBasis: 'avg7d' } })
+  assert.equal(r.rates.a.source, 'now')
+  assert.equal(r.rates.b.source, 'now')
+  near(r.rates.b.value, 0.00002)
+  assert.equal(r.rate.fallback, true)
+})

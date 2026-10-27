@@ -382,8 +382,8 @@ select {
 }
 
 .tabs button[aria-selected="true"] .tab-count {
-  background: var(--accent);
-  color: #fff;
+  background: var(--accent-text);
+  color: var(--page);
 }
 
 /* ── Controls & filters ───────────────────────────────────── */
@@ -565,6 +565,15 @@ select {
   font-size: 12px;
   font-weight: 650;
   color: var(--text);
+}
+
+.popover-body select {
+  width: 100%;
+  min-width: 0;
+}
+
+.kpi .tile-sub {
+  white-space: normal;
 }
 
 .popover-body label {

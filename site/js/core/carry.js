@@ -74,7 +74,7 @@ export function logGrid(lo, hi, steps) {
  * horizon is concave in size. Trace it across the visible depth and report the size
  * that earns the most and the largest size that still earns anything.
  */
-export function sizeCurve({ tripAt, capacity: cap, hourlyRate, rateAt, hours, basis, basisMode, leverage, capitalPerNotional, minNotional = 50, steps = 56, ...spotPerp }) {
+export function sizeCurve({ tripAt, capacity: cap, hourlyRate, rateAt, hours, basis, basisMode, leverage, capitalPerNotional, chosen = 0, minNotional = 50, steps = 56, ...spotPerp }) {
   // Spot/perp callers may pass books instead of a trip function.
   if (!tripAt) {
     tripAt = (notional) => roundTrip({ ...spotPerp, notional })
@@ -89,10 +89,27 @@ export function sizeCurve({ tripAt, capacity: cap, hourlyRate, rateAt, hours, ba
     const econ = carryEconomics({ trip, hourlyRate: rate, hours, basis, basisMode, leverage, capitalPerNotional })
     return { notional, netUsd: econ.netUsd, costBps: trip.costBps, netApr: econ.netApr, fundingApr: econ.fundingApr }
   }
+  // The chosen size is always on the curve, so the optimum is never below it.
+  const grid = logGrid(minNotional, cap, steps)
+  if (chosen > minNotional && chosen < cap) grid.splice(grid.findIndex((n) => n > chosen), 0, chosen)
   const points = []
-  for (const notional of logGrid(minNotional, cap, steps)) {
+  for (const notional of grid) {
     const point = netAt(notional)
-    if (!point) break
+    if (!point) {
+      // The book ran dry between two grid points: find the largest size that still fills.
+      const prev = points[points.length - 1]
+      if (prev) {
+        let lo = prev.notional
+        let hi = notional
+        for (let k = 0; k < 12; k++) {
+          const mid = Math.sqrt(lo * hi)
+          if (netAt(mid)) lo = mid
+          else hi = mid
+        }
+        if (lo > prev.notional * 1.001) points.push(netAt(lo))
+      }
+      break
+    }
     points.push(point)
   }
   let best = null
