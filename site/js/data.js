@@ -154,8 +154,10 @@ export class VenueData extends EventTarget {
   /** Visible depth on the thinner side of a market's precise book. */
   preciseDepth(key) {
     const p = this.raw.get(key)?.precise
-    if (!p) return 0
-    return Math.min(sideDepth(p.bids).notional, sideDepth(p.asks).notional)
+    if (!p?.bids.length || !p.asks.length) return 0
+    // Trips trade notional ÷ arrival price on each side, and that price is never below the
+    // bid: resting size × bid is depth the trip can surely use (Σ px·sz overstates asks).
+    return p.bids[0].px * Math.min(sideDepth(p.bids).qty, sideDepth(p.asks).qty)
   }
 
   /** Ask for the coarse tail of books whose visible levels cannot hold `notional`. */

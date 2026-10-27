@@ -193,6 +193,20 @@ test('a token listed with a small premium multiplier stays crypto; reduced inter
   assert.equal(perps.find((p) => p.symbol === 'OURA').category, 'equity')
 })
 
+test('crypto parameters beat a commodity ticker; gold tokens stay gold', () => {
+  const eth = fixture.order_book_details.find((d) => d.symbol === 'ETH')
+  const details = { order_book_details: [
+    { ...eth, symbol: 'GAS', market_id: 902 }, // the Neo token
+    { ...eth, symbol: 'NATGAS', market_id: 903, funding_premium_multiplier: 50, base_interest_rate: '0.0032' },
+    { ...eth, symbol: 'PAXG', market_id: 904 },
+  ] }
+  const { perps } = buildLighterUniverse(details, null)
+  const cat = (s) => perps.find((p) => p.symbol === s).category
+  assert.equal(cat('GAS'), 'crypto')
+  assert.equal(cat('NATGAS'), 'commodity')
+  assert.equal(cat('PAXG'), 'commodity')
+})
+
 test('the funding formula reproduces the rates Lighter prints', () => {
   const { perps } = universe()
   let checked = 0
@@ -248,6 +262,9 @@ test('spot ⇄ perp: same ticker, Robinhood stock tokens, gold proxies; LRTs exc
   assert.equal(byId('rhQQQ/USDC', 'US100').kind, 'proxy')
   assert.equal(byId('rhQQQ/USDC', 'QQQ').kind, 'tokenized-equity')
   assert.equal(pairs.filter((p) => p.spot.coin === 'rhSPY/USDC').length, 2)
+  // One token, one underlying: the class name on its own perp's pair too, as on Hyperliquid.
+  assert.equal(spy.underlying, 'S&P 500')
+  assert.equal(byId('rhQQQ/USDC', 'QQQ').key, 'Nasdaq-100')
   assert.ok(unbacked.includes('weETH'))
   assert.ok(!pairs.some((p) => p.spot.base.name === 'weETH'))
 })

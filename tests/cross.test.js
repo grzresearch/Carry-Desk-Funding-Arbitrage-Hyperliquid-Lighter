@@ -29,11 +29,22 @@ test('cross matching: same tickers, contract sizes, aliases, proxies; collisions
   assert.equal(find('xyz:QNT', 'QNT'), undefined)
 })
 
-test('a main-dex Hyperliquid perp is crypto whatever the other venue calls it', () => {
+test('a main-dex Hyperliquid perp is crypto whatever the other venue or the ticker says', () => {
   const [pair] = matchCross([hl('XTEN', 0.5)], [lt('XTEN', 0.5, { category: 'equity' })])
   assert.equal(pair.category, 'crypto')
+  // GAS on the main dex is the Neo token, not natural gas; PAXG is gold either way.
+  assert.equal(matchCross([hl('GAS', 1.16)], [lt('GAS', 1.16)])[0].category, 'crypto')
+  assert.equal(matchCross([hl('PAXG', 4000)], [lt('PAXG', 4000)])[0].category, 'commodity')
   const [stock] = matchCross([hl('NVDA', 180, { dex: 'xyz' })], [lt('NVDA', 180, { category: 'equity' })])
   assert.equal(stock.category, 'equity')
+})
+
+test('growth mode does not make a HIP-3 token a stock when Lighter prices it as crypto', () => {
+  const [token] = matchCross([hl('PRL', 1.76, { dex: 'io', growthMode: 'enabled' })], [lt('PRL', 1.76, { category: 'crypto' })])
+  assert.equal(token.category, 'crypto')
+  // Without Lighter's class, growth mode still hints at a real-world asset.
+  const [unknown] = matchCross([hl('NBIS', 90, { dex: 'io', growthMode: 'enabled' })], [lt('NBIS', 90)])
+  assert.equal(unknown.category, 'equity')
 })
 
 const book = (mid, half, step, n = 40, sz = 5) => ({

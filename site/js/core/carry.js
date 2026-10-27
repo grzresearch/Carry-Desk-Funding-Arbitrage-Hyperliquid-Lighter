@@ -66,7 +66,8 @@ export function logGrid(lo, hi, steps) {
   if (!(hi > lo)) return [lo]
   const a = Math.log(lo)
   const b = Math.log(hi)
-  return Array.from({ length: steps }, (_, i) => Math.exp(a + ((b - a) * i) / (steps - 1)))
+  // Exact ends: the last point is the capacity itself, not exp(log(capacity)).
+  return Array.from({ length: steps }, (_, i) => (i === 0 ? lo : i === steps - 1 ? hi : Math.exp(a + ((b - a) * i) / (steps - 1))))
 }
 
 /**
@@ -80,7 +81,9 @@ export function sizeCurve({ tripAt, capacity: cap, hourlyRate, rateAt, hours, ba
     tripAt = (notional) => roundTrip({ ...spotPerp, notional })
     cap = capacity(spotPerp)
   }
-  if (!(cap > minNotional)) return { capacity: cap, points: [], best: null, maxProfitable: null, depthLimited: false }
+  // Start low enough to show a small chosen size too.
+  const lo = chosen > 0 ? Math.min(minNotional, chosen) : minNotional
+  if (!(cap > lo)) return { capacity: cap, points: [], best: null, maxProfitable: null, depthLimited: false }
   // `rateAt(trip)` lets funding depend on size (your own order moves the premium).
   const netAt = (notional) => {
     const trip = tripAt(notional)
@@ -90,8 +93,8 @@ export function sizeCurve({ tripAt, capacity: cap, hourlyRate, rateAt, hours, ba
     return { notional, netUsd: econ.netUsd, costBps: trip.costBps, netApr: econ.netApr, fundingApr: econ.fundingApr }
   }
   // The chosen size is always on the curve, so the optimum is never below it.
-  const grid = logGrid(minNotional, cap, steps)
-  if (chosen > minNotional && chosen < cap) grid.splice(grid.findIndex((n) => n > chosen), 0, chosen)
+  const grid = logGrid(lo, cap, steps)
+  if (chosen > lo && chosen < cap) grid.splice(grid.findIndex((n) => n > chosen), 0, chosen)
   const points = []
   for (const notional of grid) {
     const point = netAt(notional)

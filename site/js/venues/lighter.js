@@ -77,12 +77,14 @@ const CRYPTO_INTEREST = 0.01 / 100
 
 function categoryOf(canonical, { m, I }) {
   const { underlying } = perpUnderlying({ symbol: canonical })
-  if (COMMODITIES.has(underlying)) return 'commodity'
+  const indexed = PROXY_CLASSES.find((c) => c.perps[underlying] != null)
+  // Real-world markets run a reduced premium multiplier and interest. Crypto parameters
+  // mean a token, even under a commodity ticker (GAS) or with the multiplier alone (XTEN,
+  // m = 0.01 at crypto interest); only the index and gold classes are known regardless.
+  if (!(m < 1 && I < CRYPTO_INTEREST) && !indexed) return 'crypto'
+  if (COMMODITIES.has(underlying) || indexed?.key === 'Gold') return 'commodity'
   if (FX.has(underlying) || /^(USD[A-Z]{3}|[A-Z]{3}USD)$/.test(canonical)) return 'fx'
-  // Real-world and pre-IPO markets run with a reduced premium multiplier and interest;
-  // a new token can have the multiplier alone (XTEN, m = 0.01 at crypto interest).
-  if ((m < 1 && I < CRYPTO_INTEREST) || PROXY_CLASSES.some((c) => c.perps[underlying] != null)) return 'equity'
-  return 'crypto'
+  return 'equity'
 }
 
 /** Funding parameters of a Lighter perp in the units core/funding.js works in. */
@@ -212,18 +214,19 @@ export function matchLighter({ spot, perps }) {
     const per = s.multiplier || 1
     const candidates = [{ underlying: name, kind: 'native', issuer: null }]
     if (/^rh[A-Z]/.test(name)) candidates.unshift({ underlying: name.slice(2), kind: 'tokenized-equity', issuer: 'Robinhood' })
+    // A token of a proxy class goes by the class name on all its pairs, as on Hyperliquid.
+    const cls = PROXY_CLASSES.find((c) => candidates.some((k) => c.spot.includes(k.underlying)))
     const paired = new Set()
     for (const cand of candidates) {
       for (const { perp, units } of bySymbol.get(cand.underlying) ?? []) {
         const deviation = price && perp.oracle ? (perp.oracle * per) / units / price - 1 : null
         if (deviation == null || Math.abs(deviation) > SPOT_TOLERANCE[cand.kind]) continue
-        pairs.push(lighterPair(s, perp, { ...cand, units: units / per, deviation }))
+        pairs.push(lighterPair(s, perp, { ...cand, underlying: cls?.key ?? cand.underlying, units: units / per, deviation }))
         paired.add(perp.key)
       }
       if (paired.size) break
     }
     // Index perps hedge the ETF token too (rhSPY ⇄ US500 at ×10.03), next to its own perp.
-    const cls = PROXY_CLASSES.find((c) => candidates.some((k) => c.spot.includes(k.underlying)))
     for (const { perp, units } of (cls && byClass.get(cls.key)) ?? []) {
       if (paired.has(perp.key)) continue
       const deviation = price && perp.oracle ? (perp.oracle * per) / units / price - 1 : null
