@@ -10,7 +10,7 @@
 // 1/100. With those, core/funding.js reproduces the printed rates exactly.
 
 import { WeightLimiter } from '../core/ratelimit.js'
-import { premiumShift } from '../core/funding.js'
+import { premiumShift, hourlyFunding } from '../core/funding.js'
 import { perpUnderlying, PROXY_CLASSES, COMMODITIES, FX } from '../core/matching.js'
 import { LighterStream } from './lighter-stream.js'
 
@@ -45,6 +45,9 @@ export const LIGHTER_ALIASES = {
   US100: 'XYZ100', // index level
   IWM: 'SMALL2000', // ETF-scaled Russell 2000
 }
+
+/** Lighter settles hourly rates truncated toward zero to 0.0001 % (1e-6). */
+export const truncateRate = (rate) => Math.trunc(rate * 1e6 + Math.sign(rate) * 1e-6) / 1e6
 
 /** Lighter symbol in Hyperliquid's naming (1000X → kX for perpUnderlying). */
 export function canonicalSymbol(symbol) {
@@ -111,8 +114,13 @@ export function buildLighterUniverse(details, stream) {
     const canonical = canonicalSymbol(d.symbol)
     const params = fundingParamsOf(d)
     const openInterest = num(d.open_interest) ?? 0
-    // Until the stream reports this hour's estimate, the last settled rate stands in.
+    // Lighter settles the formula applied to the hour's premium, truncated toward zero.
+    // Its own estimate blends in the last realized rate for the first ten minutes of an
+    // hour, so the formula on the running premium is the better forecast; without a
+    // premium, the printed estimate (or the last settled rate) stands in.
+    const premium = live?.premiumPct != null ? live.premiumPct / 100 / params.m : null
     const fundingPct = live?.fundingPct ?? live?.lastFundingPct
+    const funding = premium != null ? truncateRate(hourlyFunding(premium, params)) : fundingPct != null ? fundingPct / 100 : null
     perps.push({
       kind: 'perp',
       venue: 'lt',
@@ -123,10 +131,10 @@ export function buildLighterUniverse(details, stream) {
       canonical,
       dex: '',
       collateral: 'USDC',
-      funding: fundingPct != null ? fundingPct / 100 : null,
+      funding,
       lastFunding: live?.lastFundingPct != null ? live.lastFundingPct / 100 : null,
       // Lighter prints the hour's average premium already scaled by the multiplier.
-      premium: live?.premiumPct != null ? live.premiumPct / 100 / params.m : null,
+      premium,
       oracle: index,
       mark: live?.mark ?? num(d.mark_price),
       mid: live?.mid ?? null,

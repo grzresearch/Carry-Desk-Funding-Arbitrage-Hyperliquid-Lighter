@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { LighterStream } from '../site/js/venues/lighter-stream.js'
-import { buildLighterUniverse, matchLighter, canonicalSymbol, lighterFees, LIGHTER_FUNDING, LIGHTER_ACCOUNTS } from '../site/js/venues/lighter.js'
+import { buildLighterUniverse, matchLighter, canonicalSymbol, lighterFees, truncateRate, LIGHTER_FUNDING, LIGHTER_ACCOUNTS } from '../site/js/venues/lighter.js'
 import { hourlyFunding } from '../site/js/core/funding.js'
 
 const fixture = JSON.parse(readFileSync(new URL('./fixtures/lighter.json', import.meta.url)))
@@ -183,12 +183,36 @@ test('universe: units converted from percent, IMF and multiplier', () => {
 
 test('the funding formula reproduces the rates Lighter prints', () => {
   const { perps } = universe()
-  // Printed rates are truncated to 0,0001 %/h (and settled that way).
-  const printed = (rate) => Math.trunc(rate * 100 * 1e4 + 1e-9) / 1e4 / 100
+  let checked = 0
   for (const p of perps) {
-    if (p.premium == null || p.funding == null) continue
-    near(printed(hourlyFunding(p.premium, p.fundingParams)), p.funding, 1e-9)
+    const printed = Number(fixture.market_stats[p.marketId].current_funding_rate) / 100
+    // Printed rates are truncated toward zero to 0,0001 %/h (and settled that way).
+    near(truncateRate(hourlyFunding(p.premium, p.fundingParams)), printed, 1e-12)
+    near(p.funding, printed, 1e-12)
+    checked++
   }
+  assert.ok(checked >= 20)
+})
+
+test('a missed update is resynced once, not once per following delta', async () => {
+  const { stream, socket } = streamWith()
+  stream.follow([7])
+  socket.push(bookMsg('subscribed', 7, { bids: [level(99, 1)], asks: [level(101, 1)], nonce: 10 }))
+  socket.push(bookMsg('update', 7, { bids: [level(99, 5)], nonce: 20, begin: 15 }))
+  for (let n = 21; n < 40; n++) socket.push(bookMsg('update', 7, { bids: [level(99, n)], nonce: n, begin: n - 1 }))
+  await tick()
+  assert.equal(channelsOf(socket, 'unsubscribe').length, 1)
+  assert.equal(channelsOf(socket, 'subscribe').filter((c) => c === 'order_book/7').length, 2)
+})
+
+test('messages queued for a dead socket are not sent on the next one', async () => {
+  const { stream, socket, sockets, timers } = streamWith()
+  stream.send({ type: 'ping' })
+  socket.close()
+  timers.find((t) => t.ms === 1_000).fn()
+  sockets[1].open()
+  await tick()
+  assert.ok(!sockets[1].sent.some((m) => m.type === 'ping'))
 })
 
 test('spot ⇄ perp: same ticker, Robinhood stock tokens, gold proxies; LRTs excluded', () => {

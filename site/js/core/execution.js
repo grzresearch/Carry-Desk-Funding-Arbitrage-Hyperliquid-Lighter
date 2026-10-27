@@ -29,6 +29,9 @@
 //     adverse              = ∫ m(u) · P(u) du / q    adverse selection, counted once
 //     rest                 = E[market order for q − F], F distributed as P(F ≥ u) = P(u)
 //     fees                 = maker fee on fills, taker fee on the rest
+// The tape shows the price does not stop at a fill: it keeps going for a few seconds
+// (BTC −0.8 bps 5–10 s after a level is emptied). That continuation, ψ = 0.25·σ·√10 s
+// per filled unit, is added to the adverse selection; it does not change who fills.
 // Y = 0.35 (fits ranged 0.25–0.5) and the volume condition were fitted and checked on a
 // queue-position backtest — resting orders replayed against recorded Hyperliquid books
 // and trades — and on 24 h candle replays (BTC, SOL, LINK, thin HIP-3 and spot markets,
@@ -48,6 +51,16 @@ export const CANDLE_HOURS = 24
 
 /** Used until a market's candles have loaded: crypto-typical, flagged as an estimate. */
 const FALLBACK_SIGMA = 0.8e-4 // per √s ≈ 45 % a year
+
+/** Price continuation after a fill: ψ = POST_FILL · σ · √min(T, POST_FILL_SEC). */
+const POST_FILL = 0.25
+const POST_FILL_SEC = 10
+
+/**
+ * The 24 h volume averages in its bursts; the median hour, which Y was fitted against,
+ * runs at roughly 0.55–0.75 of that mean on the markets measured.
+ */
+const MEAN_TO_MEDIAN = 0.6
 
 /** erfc, relative error < 1.2e-7 (Numerical Recipes erfcc). */
 export function erfc(x) {
@@ -133,6 +146,8 @@ export function sigmaFromCandles(candles, step = 5) {
  * each minute's notional. For windows of 1, 2, 5, 15 and 60 minutes a zero-inflated
  * Gamma is fitted by moments on rolling sums (minutes without candles count as zero);
  * `survival(usd, sec)` = P(volume over `sec` ≥ `usd`), interpolated in log time.
+ * The flow λ is the median of the rolling hours — robust to the bursts that will not be
+ * there while you wait, and what Y was calibrated against.
  */
 export function sideVolume(candles) {
   if (!candles?.length) return { flowUsd: 0, survival: () => 0 }
@@ -179,9 +194,18 @@ export function sideVolume(candles) {
     const f = fits[fits.length - 1] // beyond the longest window: scale its mean with time
     return at(f, (usd * f.sec) / sec)
   }
+  const hours = []
+  let run = 0
+  for (let i = 0; i < minutes.length; i++) {
+    run += minutes[i]
+    if (i >= 60) run -= minutes[i - 60]
+    if (i >= 59) hours.push(run)
+  }
+  hours.sort((a, b) => a - b)
   let total = 0
   for (const v of minutes) total += v
-  return { flowUsd: total / (minutes.length * 60), survival }
+  const flowUsd = hours.length ? hours[hours.length >> 1] / 3600 : total / (minutes.length * 60)
+  return { flowUsd, survival }
 }
 
 /** Activity of a market from its 1-minute candles, or null while they are missing. */
@@ -194,7 +218,7 @@ export function activityFrom(candles) {
 
 /** Fallback from the 24 h volume alone (Gamma with shape sec/300), flagged as estimate. */
 export function activityFallback(market) {
-  const flowUsd = (market.volume ?? 0) / 86_400 / 2
+  const flowUsd = (MEAN_TO_MEDIAN * (market.volume ?? 0)) / 86_400 / 2
   return {
     sigma: FALLBACK_SIGMA,
     flowUsd,
@@ -247,6 +271,7 @@ export function makerOrder(book, side, qty, { ref, takerFeeBps, makerFeeBps, act
   const { sigma } = activity
   const lambda = activity.flowUsd / ref // base units per second on our side
   const m = (u) => (lambda > 0 ? d0 + Y * sigma * Math.sqrt((queue + u) / lambda) : Infinity)
+  const psi = POST_FILL * sigma * Math.sqrt(Math.min(T, POST_FILL_SEC))
   const pAt = (u, t) => hitProb(m(u), sigma, t) * (u > 0 ? survivalAt(activity, t)(u * ref) : 1)
 
   // Quadratic grid in u (dense where √(x0 + u) bends), trapezoid rule.
@@ -259,7 +284,7 @@ export function makerOrder(book, side, qty, { ref, takerFeeBps, makerFeeBps, act
   for (let k = 0; k < nodes; k++) {
     const du = us[k + 1] - us[k]
     intP += 0.5 * (ps[k] + ps[k + 1]) * du
-    intMP += 0.5 * ((ps[k] > 0 ? ms[k] * ps[k] : 0) + (ps[k + 1] > 0 ? ms[k + 1] * ps[k + 1] : 0)) * du
+    intMP += 0.5 * ((ps[k] > 0 ? (ms[k] + psi) * ps[k] : 0) + (ps[k + 1] > 0 ? (ms[k + 1] + psi) * ps[k + 1] : 0)) * du
   }
   const filledShare = intP / qty
 

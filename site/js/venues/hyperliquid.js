@@ -146,7 +146,13 @@ export function createHyperliquid({ client = createClient({ limiter: new WeightL
     /** 1-minute candles: volume per side and volatility for the maker model. */
     async fetchCandles(market, startMs, { priority = 9 } = {}) {
       const rows = await client.candleSnapshot(market.coin, '1m', startMs, { minutes: 1, priority })
-      return rows.map((c) => ({ time: c.t, close: Number(c.c), high: Number(c.h), low: Number(c.l), notional: Number(c.v) * Number(c.c) })).sort((a, b) => a.time - b.time)
+      const candles = rows.map((c) => ({ time: c.t, close: Number(c.c), high: Number(c.h), low: Number(c.l), notional: Number(c.v) * Number(c.c) })).sort((a, b) => a.time - b.time)
+      // Hyperliquid stops at the last minute that traded: a market that went quiet would
+      // look busier than it is. Close the window at now with an empty minute.
+      const last = candles[candles.length - 1]
+      const now = Math.floor(Date.now() / 60_000) * 60_000
+      if (last && last.time < now) candles.push({ time: now, close: last.close, high: last.close, low: last.close, notional: 0 })
+      return candles
     },
 
     fees(settings) {

@@ -204,9 +204,19 @@ function pickView(id) {
   if (id === settings.view) return
   if (settings.pair) closePair()
   set({ view: id, issuer: 'all' })
-  $('board').setAttribute('aria-labelledby', `tab-${id}`)
+  enterView()
+}
+
+/** After the view changed: idle the venues it does not read, refresh the ones it does. */
+function enterView() {
+  $('board').setAttribute('aria-labelledby', `tab-${settings.view}`)
+  // A streaming venue would otherwise keep sampling the books of the last view.
+  for (const venue of Object.values(venues)) if (!view().venues.includes(venue.id)) venue.want([])
   refreshNow()
 }
+
+/** Every venue of the view has loaded its markets (so a missing pair or issuer is really missing). */
+const viewLoaded = () => activeVenues().every((d) => d.universe) && pairsOf().length > 0
 
 function feeSummary(v) {
   const rates = accountRates(settings)
@@ -282,7 +292,9 @@ function renderIssuers() {
     el.dataset.key = key
     mount(el, options.map(([v, label]) => new Option(label, v)))
   }
-  el.value = counts.has(settings.issuer) || settings.issuer === 'all' ? settings.issuer : 'all'
+  // An issuer from a link that this view does not have would hide every row.
+  if (settings.issuer !== 'all' && !counts.has(settings.issuer) && viewLoaded()) set({ issuer: 'all' })
+  el.value = counts.has(settings.issuer) ? settings.issuer : 'all'
 }
 
 function bindControls() {
@@ -635,7 +647,11 @@ function closePair() {
 
 function renderOpenDetail() {
   const r = rows.find((x) => x.pair.id === settings.pair)
-  if (!r) return
+  if (!r) {
+    // A link to a pair this view does not have (any more): forget it.
+    if (viewLoaded()) set({ pair: null })
+    return
+  }
   const drawer = $('drawer')
   if (drawer.getAttribute('aria-hidden') === 'true') {
     openPair(settings.pair)
@@ -681,7 +697,21 @@ function schedule() {
   }, wait)
 }
 
-for (const venue of Object.values(venues)) venue.addEventListener('change', scheduleDataRender)
+// Data of venues the view does not read never needs a render.
+for (const venue of Object.values(venues)) venue.addEventListener('change', () => view().venues.includes(venue.id) && scheduleDataRender())
+
+// A shared link pasted into an open tab only changes the hash: take it over.
+window.addEventListener('hashchange', () => {
+  const next = readHash()
+  const viewChanged = next.view !== settings.view
+  if (settings.pair && settings.pair !== next.pair) closePair()
+  Object.assign(settings, next)
+  settingsVersion++
+  writeHash()
+  renderControls()
+  scheduleRender()
+  if (viewChanged) enterView()
+})
 setInterval(renderStatus, 1000)
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && Date.now() > nextRefreshAt) refreshNow()
@@ -689,8 +719,7 @@ document.addEventListener('visibilitychange', () => {
 
 applyTheme(storage((s) => s.getItem('carry-desk-theme')))
 if (matchMedia('(max-width: 860px)').matches) $('params').open = false
-$('board').setAttribute('aria-labelledby', `tab-${settings.view}`)
 bindControls()
 renderControls()
 scheduleRender()
-refreshNow()
+enterView()

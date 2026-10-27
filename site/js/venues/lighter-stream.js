@@ -69,6 +69,7 @@ export class LighterStream {
     this.waiters = new Map() // market id → [resolve]
     this.pingTimer = null
     this.sampleTimer = null
+    this.generation = 0 // connection count: messages queued for a dead socket are dropped
   }
 
   get connected() {
@@ -79,6 +80,7 @@ export class LighterStream {
     if (this.ws || !this.WebSocketImpl) return
     const ws = new this.WebSocketImpl(this.url)
     this.ws = ws
+    this.generation++
     ws.onopen = () => {
       this.open = true
       this.retries = 0
@@ -127,8 +129,9 @@ export class LighterStream {
   }
 
   async send(msg, priority = 5) {
+    const generation = this.generation
     await this.limiter.take(1, priority)
-    if (this.open && this.ws?.readyState === 1) this.ws.send(JSON.stringify(msg))
+    if (this.open && generation === this.generation && this.ws?.readyState === 1) this.ws.send(JSON.stringify(msg))
   }
 
   subscribe(id, priority = 3) {
@@ -137,10 +140,15 @@ export class LighterStream {
     this.send({ type: 'subscribe', channel: `order_book/${id}` }, priority)
   }
 
-  /** Ahead of new samples: a finished sample must stop streaming before the next starts. */
+  /**
+   * At the same priority as follow()'s subscribe: the limiter keeps FIFO order within a
+   * priority, so an unsubscribe queued earlier never overtakes a later re-subscribe of the
+   * same book (Lighter does not count subscriptions — the late unsubscribe would end the
+   * new stream). Ahead of new samples, too.
+   */
   unsubscribe(id) {
     if (!this.subscribed.delete(id)) return
-    this.send({ type: 'unsubscribe', channel: `order_book/${id}` }, 2)
+    this.send({ type: 'unsubscribe', channel: `order_book/${id}` }, 1)
   }
 
   /** Books to keep fresh by sampling, most important first (starts right away). */
@@ -233,12 +241,14 @@ export class LighterStream {
     if (snapshot) {
       book = { bids: new Map(), asks: new Map(), nonce: null, time: null, ready: false }
       this.books.set(id, book)
-    } else if (!book?.ready || ob.begin_nonce !== book.nonce) {
-      // Missed an update: drop the book and ask for a fresh snapshot.
-      if (book) book.ready = false
+    } else if (!book?.ready) {
+      return // waiting for a fresh snapshot: deltas until then are meaningless
+    } else if (ob.begin_nonce !== book.nonce) {
+      // Missed an update: drop the book and ask for a fresh snapshot, once.
+      book.ready = false
       this.subscribed.delete(id)
-      this.send({ type: 'unsubscribe', channel: `order_book/${id}` }, 2)
-      this.subscribe(id, 2)
+      this.send({ type: 'unsubscribe', channel: `order_book/${id}` }, 1)
+      this.subscribe(id, 1)
       return
     }
     applyLevels(book.bids, ob.bids)

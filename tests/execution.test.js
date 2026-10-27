@@ -42,10 +42,26 @@ test('side volume: flow per second and a zero-inflated survival curve', () => {
   assert.ok(v.survival(500, 120) >= v.survival(500, 60))
 })
 
+test('flow is the median rolling hour: one burst hour does not move it', () => {
+  const quiet = minutes(600, () => ({ close: 1, notional: 7200 })) // $3 600 per side per minute
+  const burst = minutes(600, (i) => ({ close: 1, notional: i >= 300 && i < 360 ? 720_000 : 7200 }))
+  near(sideVolume(quiet).flowUsd, 60, 1e-9)
+  near(sideVolume(burst).flowUsd, 60, 1e-9)
+})
+
+test('adverse selection includes the price running on after a fill', () => {
+  const leg = makerOrder(book, 'buy', 1e-6, { ref: 100, takerFeeBps: 0, makerFeeBps: 0, activity: busy, waitMin: 5 })
+  const lambda = 20_000 / 100
+  const m = 0.0005 + QUEUE_Y * 1e-4 * Math.sqrt(10 / lambda)
+  const psi = 0.25 * 1e-4 * Math.sqrt(10)
+  near(leg.cost.adverse / leg.arrival, (m + psi) * leg.maker.filledShare, 1e-9)
+})
+
 test('activity needs half an hour of candles; the fallback is flagged', () => {
   assert.equal(activityFrom(minutes(10, () => ({ close: 1, notional: 1 }))), null)
+  // The median hour runs at ~0.6 of the 24 h mean.
   const a = activityFallback({ volume: 86_400 * 2 * 1000 })
-  near(a.flowUsd, 1000)
+  near(a.flowUsd, 600)
   assert.equal(a.estimated, true)
 })
 

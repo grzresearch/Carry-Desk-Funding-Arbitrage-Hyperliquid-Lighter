@@ -8,7 +8,15 @@ function fakeClock() {
   const timers = []
   return {
     now: () => t,
-    schedule: (fn, ms) => timers.push({ at: t + ms, fn }),
+    schedule: (fn, ms) => {
+      const timer = { at: t + ms, fn }
+      timers.push(timer)
+      return timer
+    },
+    cancel: (timer) => {
+      const i = timers.indexOf(timer)
+      if (i >= 0) timers.splice(i, 1)
+    },
     advance(ms) {
       const end = t + ms
       // Fire timers in order, letting each one schedule the next within the same advance.
@@ -65,7 +73,7 @@ test('lower priority numbers jump the queue', async () => {
   const limiter = new WeightLimiter({ budget: 10, windowMs: 1000, ...clock })
   const done = []
   await limiter.take(10)
-  limiter.take(5, 9).then(() => done.push('slow'))
+  limiter.take(5, 5).then(() => done.push('slow'))
   limiter.take(5, 0).then(() => done.push('urgent'))
   clock.advance(1000)
   await flush()
@@ -116,4 +124,18 @@ test('funding history reserves its per-item weight up front', async () => {
   const client = createClient({ fetchImpl: async () => ({ status: 200, ok: true, json: async () => rows }), limiter })
   await client.fundingHistory('BTC', Date.now() - 168 * 3_600_000)
   assert.equal(limiter.usage(), 28)
+})
+
+test('background work leaves headroom: an urgent request never waits out a full window', async () => {
+  const clock = fakeClock()
+  const limiter = new WeightLimiter({ budget: 100, windowMs: 60_000, ...clock })
+  const log = []
+  for (let i = 0; i < 10; i++) limiter.take(20, 8).then(() => log.push(`bg${i}`))
+  await flush()
+  // Background stops at 60 % of the budget …
+  assert.deepEqual(log, ['bg0', 'bg1', 'bg2'])
+  // … so a book request goes straight through.
+  limiter.take(20, 3).then(() => log.push('book'))
+  await flush()
+  assert.equal(log.at(-1), 'book')
 })

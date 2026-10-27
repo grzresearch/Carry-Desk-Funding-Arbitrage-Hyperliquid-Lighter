@@ -125,7 +125,7 @@ export function makerNotes(trip, legs = SPOT_PERP_LEGS) {
   return h('details', { class: 'fine maker-notes' },
     h('summary', null, 'Maker-Simulation je Order'),
     h('ul', null, notes),
-    h('p', null, 'Modell: Eine Einheit der Order füllt, wenn der faire Preis die Distanz m = halber Spread + Y·σ·√(Queue davor / Gegenflow) auf sie zuläuft (in der Wartezeit T mit Wahrscheinlichkeit erfc(m / σ√2T)) und auf deiner Seite genug Volumen handelt (Verteilung aus 1-Minuten-Kerzen). Gefüllt wird also genau dann, wenn sich der Preis gegen dich bewegt – das ist die Adverse Selection. Der Rest geht nach T als Market-Order ins Buch. Y = 0,35, kalibriert an einem Queue-Backtest auf aufgezeichneten Orderbüchern und Trades.'))
+    h('p', null, 'Modell: Eine Einheit der Order füllt, wenn der faire Preis die Distanz m = halber Spread + Y·σ·√(Queue davor / Gegenflow) auf sie zuläuft (in der Wartezeit T mit Wahrscheinlichkeit erfc(m / σ√2T)) und auf deiner Seite genug Volumen handelt (Verteilung aus 1-Minuten-Kerzen). Gefüllt wird also genau dann, wenn sich der Preis gegen dich bewegt – das ist die Adverse Selection, plus das Weiterlaufen des Preises in den Sekunden nach dem Fill. Der Rest geht nach T als Market-Order ins Buch. Y = 0,35, kalibriert an einem Queue-Backtest auf aufgezeichneten Orderbüchern und Trades.'))
 }
 
 export function sizeTable(points) {

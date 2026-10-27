@@ -29,7 +29,7 @@ export class VenueData extends EventTarget {
     this.updatedAt = null
     this.error = null
     this.busy = false
-    this.pending = { coarse: new Set(), history: new Map(), candles: new Set() }
+    this.pending = { coarse: new Set(), history: new Map(), candles: new Map() } // key → priority queued
     this.inflight = new Map() // `${key}|precise` / `${key}|coarse` → book request
     this.marketRefresh = null
     this.notifyTimer = null
@@ -202,10 +202,13 @@ export class VenueData extends EventTarget {
   wantCandles(keys, priority = 9) {
     for (const key of keys) {
       const market = this.markets.get(key)
-      if (!market || this.pending.candles.has(key)) continue
+      if (!market) continue
       const at = this.candlesAt.get(key)
       if (at && Date.now() - at < CANDLES_TTL) continue
-      this.pending.candles.add(key)
+      // A request already queued at the same or a more urgent priority will do.
+      const queued = this.pending.candles.get(key)
+      if (queued != null && queued <= priority) continue
+      this.pending.candles.set(key, priority)
       this.adapter
         .fetchCandles(market, Date.now() - CANDLE_HOURS * HOUR, { priority })
         .then((rows) => {
@@ -214,7 +217,9 @@ export class VenueData extends EventTarget {
           this.notify()
         })
         .catch((err) => console.warn(this.id, 'candles', key, err.message))
-        .finally(() => this.pending.candles.delete(key))
+        .finally(() => {
+          if (this.pending.candles.get(key) === priority) this.pending.candles.delete(key)
+        })
     }
   }
 
