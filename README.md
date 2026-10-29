@@ -1,6 +1,6 @@
 # Carry Desk · Funding-Arbitrage auf Hyperliquid & Lighter
 
-**Live:** https://grzresearch.github.io/Hyperliquid-Funding-Arbitrage/
+**Live:** https://grzresearch.github.io/Carry-Desk-Funding-Arbitrage-Hyperliquid-Lighter/
 
 Eine statische Seite, die ausrechnet, ob sich delta-neutraler Funding-Carry lohnt – inklusive der echten Kosten für **Entry und Exit beider Legs** (Implementation Shortfall beim Abarbeiten der Orderbücher). Ein hohes Funding auf einem dünnen Buch lohnt sich oft nicht – genau das zeigt die Seite. Drei Ansichten:
 
